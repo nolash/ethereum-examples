@@ -1,0 +1,1 @@
+/home/lash/data/src/ext/solidity/std/owned.sol

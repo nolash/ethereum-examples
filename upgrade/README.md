@@ -41,6 +41,7 @@ Attempt another upgrade, with preset store in Main contract
 4. MainUpgrade -> setStore("address of Store")
 5. copy address of MainUpgrade
 6. Upgrader -> upgrade("address of MainUpgrade"): throws 
+7. Upgrader -> current(): == address of Main (not MainUpgrade)
 
 Attempt to steal eth by killing contract explicitly, transferring ownership
 

@@ -174,6 +174,8 @@ func (self *pssSampleService) Protocols() (protos []p2p.Protocol) {
 }
 
 func (self *pssSampleService) Start(srv *p2p.Server) error {
+	newaddr := self.bzz.UpdateLocalAddr([]byte(srv.Self().String()))
+	log.Warn("Updated bzz local addr", "oaddr", fmt.Sprintf("%x", newaddr.OAddr), "uaddr", fmt.Sprintf("%s", newaddr.UAddr))
 	err := self.bzz.Start(srv)
 	if err != nil {
 		return err
@@ -244,6 +246,7 @@ func main() {
 	bzzCfg.SyncEnabled = false
 	bzzCfg.Port = *bzzport
 	bzzCfg.Path = datadir
+	bzzCfg.HiveParams.Discovery = true
 	bzzCfg.Init(privkey)
 
 	// create our service

@@ -1,3 +1,3 @@
-# Solidity
+# Ethereum
 
 Code examples

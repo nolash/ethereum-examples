@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
@@ -17,19 +19,18 @@ import (
 )
 
 const (
-	ipcName      = "pssdemo.ipc"
-	lockFilename = ".pssdemo-lock"
-	protoName    = "mb"
-	protoVersion = 1
-	protoMax     = 2048
+	ipcName        = "pssdemo.ipc"
+	lockFilename   = ".pssdemo-lock"
+	maxDifficulty  = 23
+	minDifficulty  = 12
+	submitInterval = time.Millisecond * 50
 )
 
 var (
 	loglevel = flag.Int("l", 3, "loglevel")
 	port     = flag.Int("p", 30499, "p2p port")
-	//bzzport  = flag.String("b", "8555", "bzz port")
-	enode   = flag.String("e", "", "enode to connect to")
-	httpapi = flag.String("a", "localhost:8545", "http api")
+	enode    = flag.String("e", "", "enode to connect to")
+	httpapi  = flag.String("a", "localhost:8545", "http api")
 )
 
 func init() {
@@ -71,7 +72,7 @@ func main() {
 		return
 	}
 
-	svc := service.NewDemoService(false, 3)
+	svc := service.NewDemoService(19, 6, time.Second*10)
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
 		return svc, nil
 	}); err != nil {
@@ -93,6 +94,7 @@ func main() {
 			log.Error("lockfile set but cant read")
 			return
 		}
+		svc.SetDifficulty(0)
 		lockfile.Close()
 	} else {
 		lockfile, err = os.Create(lockFilename)
@@ -129,5 +131,31 @@ func main() {
 
 	sigC := make(chan os.Signal)
 	signal.Notify(sigC, syscall.SIGINT)
+
+	if !svc.IsWorker() {
+		go func() {
+			t := time.NewTicker(submitInterval)
+			for {
+				select {
+				case <-t.C:
+					data := make([]byte, 64)
+					rand.Read(data)
+					difficulty := rand.Intn(maxDifficulty-minDifficulty) + minDifficulty
+					var id uint64
+					err := client.Call(&id, "demo_submit", data, difficulty)
+					if err != nil {
+						log.Warn("job not accepted", "err", err)
+					} else {
+						log.Info("job submitted", "id", id)
+					}
+				case <-sigC:
+					t.Stop()
+					return
+				}
+			}
+
+		}()
+	}
+
 	<-sigC
 }

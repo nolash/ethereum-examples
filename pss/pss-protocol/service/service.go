@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -19,7 +19,6 @@ var (
 )
 
 type DemoService struct {
-	tooLazyToWork bool
 	maxJobs       int
 	currentJobs   int
 	maxDifficulty uint8
@@ -49,23 +48,37 @@ func NewDemoService(maxDifficulty uint8, maxJobs int, maxTimePerJob time.Duratio
 	}
 }
 
-func (self *DemoService) SetLazy(lazy bool) {
-	self.tooLazyToWork = lazy
+func (self *DemoService) SetDifficulty(d uint8) {
+	self.maxDifficulty = d
+}
+
+func (self *DemoService) IsWorker() bool {
+	return self.maxDifficulty > 0
 }
 
 func (self *DemoService) APIs() []rpc.API {
-	return []rpc.API{}
+	return []rpc.API{
+		{
+			Namespace: "demo",
+			Version:   "1.0",
+			Service:   newDemoServiceAPI(self),
+			Public:    true,
+		},
+	}
 }
 
 func (self *DemoService) Protocols() (protos []p2p.Protocol) {
 	proto, err := protocol.NewDemoProtocol(self.Run)
 	if err != nil {
-		log.Crit("can't start demo protocol")
+		log.Crit("can't create demo protocol")
 	}
 	proto.SkillsHandler = self.skillsHandler
 	proto.StatusHandler = self.statusHandler
 	proto.RequestHandler = self.requestHandler
 	proto.ResultHandler = self.resultHandler
+	if err := proto.Init(); err != nil {
+		log.Crit("can't init demo protocol")
+	}
 	return []p2p.Protocol{proto.Protocol}
 }
 
@@ -81,6 +94,9 @@ func (self *DemoService) Stop() error {
 // hook to run when protocol starts on a peer
 func (self *DemoService) Run(p *protocols.Peer) error {
 	log.Info("run protocol hook", "peer", p)
+	go p.Send(&protocol.Skills{
+		Difficulty: self.maxDifficulty,
+	})
 	return nil
 }
 
@@ -95,20 +111,22 @@ func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
 	return nil
 }
 
-func (self *DemoService) submitJob(data []byte, difficulty uint8) error {
+func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, error) {
 	p := self.getNextWorker(difficulty)
 	if p == nil {
-		return errors.New("Couldn't find any workers")
+		return 0, fmt.Errorf("Couldn't find any workers for difficulty %d", difficulty)
 	}
 	self.mu.Lock()
-	defer self.mu.Unlock()
+	defer func() {
+		self.submitLastId++
+		self.mu.Unlock()
+	}()
 	go p.Send(&protocol.Request{
 		Id:         self.submitLastId,
 		Data:       data,
 		Difficulty: difficulty,
 	})
-	self.submitLastId++
-	return nil
+	return self.submitLastId, nil
 }
 
 // message handling area
@@ -164,7 +182,7 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 }
 
 func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) error {
-	if !self.tooLazyToWork {
+	if self.maxDifficulty > 0 {
 		log.Warn("ignored result type", "msg", msg)
 	}
 	log.Debug("got result type", "msg", msg)

@@ -72,7 +72,7 @@ func main() {
 		return
 	}
 
-	svc := service.NewDemoService(19, 6, time.Second*10)
+	svc := service.NewDemoService(20, 3, time.Second)
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
 		return svc, nil
 	}); err != nil {

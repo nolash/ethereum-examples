@@ -131,7 +131,7 @@ func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, e
 
 // message handling area
 func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) error {
-	log.Info("have skills type", "msg", msg)
+	log.Trace("have skills type", "msg", msg)
 	self.mu.Lock()
 	self.workers[p] = msg.Difficulty
 	self.mu.Unlock()
@@ -139,21 +139,24 @@ func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) 
 }
 
 func (self *DemoService) statusHandler(msg *protocol.Status, p *protocols.Peer) error {
-	log.Info("have status type", "msg", msg)
+	log.Trace("have status type", "msg", msg)
 	return nil
 }
 
 func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer) error {
-	log.Debug("have request type", "msg", msg)
 
 	self.mu.Lock()
+
+	log.Trace("have request type", "msg", msg, "currentjobs", self.currentJobs)
 	if self.maxDifficulty < msg.Difficulty {
 		self.mu.Unlock()
+		log.Debug("too hard!")
 		go p.Send(&protocol.Status{Code: protocol.StatusTooHard})
 		return nil
 	}
-	if self.currentJobs == self.maxJobs {
+	if self.currentJobs >= self.maxJobs {
 		self.mu.Unlock()
+		log.Debug("too busy!")
 		go p.Send(&protocol.Status{Code: protocol.StatusBusy})
 		return nil
 	}
@@ -164,11 +167,9 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 	defer cancel()
 	j, err := doJob(ctx, msg.Data, msg.Difficulty)
 
-	self.mu.Lock()
-	self.currentJobs--
-	self.mu.Unlock()
 	if err != nil {
 		go p.Send(&protocol.Status{Code: protocol.StatusGaveup})
+		log.Debug("too long!")
 		return nil
 	}
 
@@ -177,15 +178,20 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 		Nonce: j.Nonce,
 		Hash:  j.Hash,
 	})
+	self.mu.Lock()
+	self.currentJobs--
+	self.mu.Unlock()
+
+	log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
 
 	return nil
 }
 
 func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) error {
 	if self.maxDifficulty > 0 {
-		log.Warn("ignored result type", "msg", msg)
+		log.Trace("ignored result type", "msg", msg)
 	}
-	log.Debug("got result type", "msg", msg)
+	log.Trace("got result type", "msg", msg)
 
 	return nil
 }

@@ -1,131 +1,173 @@
 package service
 
 import (
-	"fmt"
+	"context"
+	"errors"
+	"sync"
 	"time"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
-	"github.com/ethereum/go-ethereum/swarm/pss"
-)
 
-const (
-	protoName    = "mb"
-	protoVersion = 1
-	protoMax     = 2048
+	"../protocol"
 )
 
 var (
-	protoTopic = pss.Topic{0x42}
+	submitsDelay = time.Second
 )
 
-// protocol message types
-type payload struct {
-	LastHash  common.Hash
-	NewHash   common.Hash
-	Signature []byte
-}
-type Result struct {
-	*payload
-	More bool
-}
-type Status struct {
-	Ready bool
-}
-type Job struct {
-	*payload
-	Deadline time.Time
-}
-
 type DemoService struct {
-	enodes   []string
-	protocol *pss.Protocol
+	tooLazyToWork bool
+	maxJobs       int
+	currentJobs   int
+	maxDifficulty uint8
+	maxTimePerJob time.Duration
+	mu            sync.RWMutex
+	ctx           context.Context
+	cancel        func()
+	workers       map[*protocols.Peer]uint8
+	submitLastId  uint64
+	submits       []*protocol.Request
+	submitsPos    uint8
+	submitsDelay  time.Duration
+	results       []*protocol.Result
 }
 
-// implement node.Service
-func (self *DemoService) Protocols() []p2p.Protocol {
-	return []p2p.Protocol{
-		{
-			Name:    "demo",
-			Version: 1,
-			Length:  1,
-			Run:     self.Run,
-		},
+func NewDemoService(maxDifficulty uint8, maxJobs int, maxTimePerJob time.Duration) *DemoService {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &DemoService{
+		maxJobs:       maxJobs,
+		maxDifficulty: maxDifficulty,
+		maxTimePerJob: maxTimePerJob,
+		ctx:           ctx,
+		cancel:        cancel,
+		workers:       make(map[*protocols.Peer]uint8),
+		submits:       make([]*protocol.Request, 10),
+		submitsDelay:  time.Second,
 	}
+}
+
+func (self *DemoService) SetLazy(lazy bool) {
+	self.tooLazyToWork = lazy
 }
 
 func (self *DemoService) APIs() []rpc.API {
-	return []rpc.API{
-		{
-			Namespace: "demo",
-			Version:   "1.0",
-			Service:   newDemoServiceAPI(self.protocol, self.Run),
-			Public:    true,
-		},
-	}
+	return []rpc.API{}
 }
 
-func (self *DemoService) Start(p *p2p.Server) error {
+func (self *DemoService) Protocols() (protos []p2p.Protocol) {
+	proto, err := protocol.NewDemoProtocol(self.Run)
+	if err != nil {
+		log.Crit("can't start demo protocol")
+	}
+	proto.SkillsHandler = self.skillsHandler
+	proto.StatusHandler = self.statusHandler
+	proto.RequestHandler = self.requestHandler
+	proto.ResultHandler = self.resultHandler
+	return []p2p.Protocol{proto.Protocol}
+}
+
+func (self *DemoService) Start(srv *p2p.Server) error {
 	return nil
 }
 
 func (self *DemoService) Stop() error {
+	self.cancel()
 	return nil
 }
 
-// Implement rest of PssService
-func (self *DemoService) Spec() *protocols.Spec {
-	return &protocols.Spec{
-		Name:       protoName,
-		Version:    protoVersion,
-		MaxMsgSize: protoMax,
-		Messages: []interface{}{
-			&Result{},
-			&Status{},
-			&Job{},
-		},
+// hook to run when protocol starts on a peer
+func (self *DemoService) Run(p *protocols.Peer) error {
+	log.Info("run protocol hook", "peer", p)
+	return nil
+}
+
+func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
+	self.mu.RLock()
+	defer self.mu.RUnlock()
+	for p, d := range self.workers {
+		if d >= difficulty {
+			return p
+		}
 	}
+	return nil
 }
 
-func (self *DemoService) Topic() *pss.Topic {
-	return &protoTopic
+func (self *DemoService) submitJob(data []byte, difficulty uint8) error {
+	p := self.getNextWorker(difficulty)
+	if p == nil {
+		return errors.New("Couldn't find any workers")
+	}
+	self.mu.Lock()
+	defer self.mu.Unlock()
+	go p.Send(&protocol.Request{
+		Id:         self.submitLastId,
+		Data:       data,
+		Difficulty: difficulty,
+	})
+	self.submitLastId++
+	return nil
 }
 
-func (self *DemoService) Init(ps *pss.Pss) error {
-	protocol := self.Protocols()[0]
-	psp, err := pss.RegisterProtocol(ps, self.Topic(), self.Spec(), &protocol, &pss.ProtocolParams{true, true})
+// message handling area
+func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) error {
+	log.Info("have skills type", "msg", msg)
+	self.mu.Lock()
+	self.workers[p] = msg.Difficulty
+	self.mu.Unlock()
+	return nil
+}
+
+func (self *DemoService) statusHandler(msg *protocol.Status, p *protocols.Peer) error {
+	log.Info("have status type", "msg", msg)
+	return nil
+}
+
+func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer) error {
+	log.Debug("have request type", "msg", msg)
+
+	self.mu.Lock()
+	if self.maxDifficulty < msg.Difficulty {
+		self.mu.Unlock()
+		go p.Send(&protocol.Status{Code: protocol.StatusTooHard})
+		return nil
+	}
+	if self.currentJobs == self.maxJobs {
+		self.mu.Unlock()
+		go p.Send(&protocol.Status{Code: protocol.StatusBusy})
+		return nil
+	}
+	self.currentJobs++
+	self.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(self.ctx, self.maxTimePerJob)
+	defer cancel()
+	j, err := doJob(ctx, msg.Data, msg.Difficulty)
+
+	self.mu.Lock()
+	self.currentJobs--
+	self.mu.Unlock()
 	if err != nil {
-		return err
+		go p.Send(&protocol.Status{Code: protocol.StatusGaveup})
+		return nil
 	}
-	ps.Register(self.Topic(), psp.Handle)
-	self.protocol = psp
+
+	go p.Send(&protocol.Result{
+		Id:    msg.Id,
+		Nonce: j.Nonce,
+		Hash:  j.Hash,
+	})
+
 	return nil
 }
 
-func (self *DemoService) Run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
-	pp := protocols.NewPeer(p, rw, self.Spec())
-	_ = pp
-	return nil
-}
-
-// api to interact with pss protocol
-type DemoServiceAPI struct {
-	protocol *pss.Protocol
-	run      func(*p2p.Peer, p2p.MsgReadWriter) error
-}
-
-func newDemoServiceAPI(prot *pss.Protocol, run func(*p2p.Peer, p2p.MsgReadWriter) error) *DemoServiceAPI {
-	return &DemoServiceAPI{
-		protocol: prot,
-		run:      run,
+func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) error {
+	if !self.tooLazyToWork {
+		log.Warn("ignored result type", "msg", msg)
 	}
-}
+	log.Debug("got result type", "msg", msg)
 
-func (self *DemoServiceAPI) AddPssPeer(key string) error {
-	self.protocol.AddPeer(&p2p.Peer{}, self.run, protoTopic, true, key)
-	log.Info(fmt.Sprintf("adding peer %x to demoservice protocol", key))
 	return nil
 }

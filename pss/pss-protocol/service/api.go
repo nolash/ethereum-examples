@@ -15,6 +15,8 @@ func (self *DemoServiceAPI) Submit(data []byte, difficulty uint8) (uint64, error
 }
 
 func (self *DemoServiceAPI) SetDifficulty(d uint8) error {
+	self.service.mu.Lock()
+	defer self.service.mu.Unlock()
 	self.service.maxDifficulty = d
 	return nil
 }

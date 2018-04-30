@@ -2,17 +2,25 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"math/rand"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
+	"github.com/ethereum/go-ethereum/rpc"
+	swarmapi "github.com/ethereum/go-ethereum/swarm/api"
+	"github.com/ethereum/go-ethereum/swarm/pss"
 
 	colorable "github.com/mattn/go-colorable"
 
+	"./bzz"
+	"./protocol"
 	"./service"
 )
 
@@ -28,17 +36,19 @@ var (
 	minDifficulty uint8
 	maxTime       time.Duration
 	maxJobs       int
+	privateKeys   map[discover.NodeID]*ecdsa.PrivateKey
 )
 
 func init() {
 	log.PrintOrigins(true)
-	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	log.Root().SetHandler(log.LvlFilterHandler(log.LvlDebug, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
 
 	maxDifficulty = defaultMaxDifficulty
 	minDifficulty = defaultMinDifficulty
 	maxTime = defaultMaxTime
 	maxJobs = defaultMaxJobs
 
+	privateKeys = make(map[discover.NodeID]*ecdsa.PrivateKey)
 	adapters.RegisterServices(newServices())
 }
 
@@ -51,12 +61,12 @@ func main() {
 
 	n := simulations.NewNetwork(a, &simulations.NetworkConfig{
 		ID:             "protocol-demo",
-		DefaultService: "demo",
+		DefaultService: "bzz",
 	})
 	defer n.Shutdown()
 
 	var nids []discover.NodeID
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 10; i++ {
 		c := adapters.RandomNodeConfig()
 		nod, err := n.NewNodeWithConfig(c)
 		if err != nil {
@@ -64,6 +74,11 @@ func main() {
 			return
 		}
 		nids = append(nids, nod.ID())
+		privateKeys[nod.ID()], err = crypto.GenerateKey()
+		if err != nil {
+			log.Error(err.Error())
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
@@ -72,6 +87,15 @@ func main() {
 		log.Error(err.Error())
 		return
 	}
+
+	err := connectPssPeers(n, nids)
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
+
+	// the fucking healthy stuff
+	time.Sleep(time.Second * 1)
 
 	quitC := make(chan struct{})
 	trigger := make(chan discover.NodeID)
@@ -90,29 +114,36 @@ func main() {
 
 	action := func(ctx context.Context) error {
 		for i, nid := range nids {
-			go func() {
-				defer func() {
+			if i == 0 {
+				go func() {
 					trigger <- nid
 				}()
-				client, err := n.GetNode(nid).Client()
-				if err != nil {
-					return
-				}
-				if i != 0 {
-					err := client.Call(nil, "demo_setDifficulty", 0)
-					if err != nil {
-						return
-					}
-				}
+				continue
+			}
+			client, err := n.GetNode(nid).Client()
+			if err != nil {
+				return err
+			}
+
+			err = client.Call(nil, "demo_setDifficulty", 0)
+			if err != nil {
+				return err
+			}
+
+			go func(nid discover.NodeID) {
 				tick := time.NewTicker(time.Millisecond * 500)
 				for {
 					select {
 					case e := <-events:
 						if e.Type == simulations.EventTypeMsg {
-							log.Info("got message", "e", e)
+							continue
 						}
 
 					case <-quitC:
+						trigger <- nid
+						return
+					case <-ctx.Done():
+						trigger <- nid
 						return
 					case <-tick.C:
 					}
@@ -125,10 +156,10 @@ func main() {
 					if err != nil {
 						log.Warn("job not accepted", "err", err)
 					} else {
-						log.Info("job submitted", "id", id)
+						log.Info("job submitted", "id", id, "nid", nid)
 					}
 				}
-			}()
+			}(nid)
 		}
 		return nil
 	}
@@ -154,13 +185,71 @@ func main() {
 	if step.Error != nil {
 		log.Error(step.Error.Error())
 	}
+	log.Error("out")
 	return
+}
+
+func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
+	var pivotBaseAddr string
+	var pivotPubKeyHex string
+	var pivotClient *rpc.Client
+	topic := pss.BytesToTopic([]byte(protocol.Spec.Name))
+	for i, nid := range nids {
+		client, err := n.GetNode(nid).Client()
+		if err != nil {
+			return err
+		}
+		var baseAddr string
+		err = client.Call(&baseAddr, "pss_baseAddr")
+		if err != nil {
+			return err
+		}
+		pubkey := privateKeys[nid].PublicKey
+		pubkeybytes := crypto.FromECDSAPub(&pubkey)
+		pubkeyhex := common.ToHex(pubkeybytes)
+		if i == 0 {
+			pivotBaseAddr = baseAddr
+			pivotPubKeyHex = pubkeyhex
+			pivotClient = client
+		} else {
+			err = client.Call(nil, "pss_setPeerPublicKey", pivotPubKeyHex, common.ToHex(topic[:]), pivotBaseAddr)
+			if err != nil {
+				return err
+			}
+			err = pivotClient.Call(nil, "pss_setPeerPublicKey", pubkeyhex, common.ToHex(topic[:]), baseAddr)
+			if err != nil {
+				return err
+			}
+			err = client.Call(nil, "demops_addPeer", pivotPubKeyHex, pivotBaseAddr)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func newServices() adapters.Services {
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
-			return service.NewDemoService(maxDifficulty, maxJobs, maxTime), nil
+			svc := service.NewDemoService(maxDifficulty, maxJobs, maxTime)
+			return svc, nil
+		},
+		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
+			// create the pss service that wraps the demo protocol
+			svc := service.NewDemoService(maxDifficulty, maxJobs, maxTime)
+			bzzCfg := swarmapi.NewConfig()
+			bzzCfg.SyncEnabled = false
+			//bzzCfg.Port = *bzzport
+			//bzzCfg.Path = node.ServiceContext.
+			bzzCfg.HiveParams.Discovery = true
+			bzzCfg.Init(privateKeys[node.Config.ID])
+
+			bzzSvc, err := bzz.NewPssService(bzzCfg, svc)
+			if err != nil {
+				return nil, err
+			}
+			return bzzSvc, nil
 		},
 	}
 }

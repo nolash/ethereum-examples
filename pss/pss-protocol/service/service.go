@@ -129,7 +129,7 @@ func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, e
 
 // message handling area
 func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) error {
-	log.Trace("have skills type", "msg", msg)
+	log.Trace("have skills type", "msg", msg, "peer", p)
 	self.mu.Lock()
 	self.workers[p] = msg.Difficulty
 	self.mu.Unlock()
@@ -137,7 +137,7 @@ func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) 
 }
 
 func (self *DemoService) statusHandler(msg *protocol.Status, p *protocols.Peer) error {
-	log.Trace("have status type", "msg", msg)
+	log.Trace("have status type", "msg", msg, "peer", p)
 	return nil
 }
 
@@ -145,7 +145,7 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 
 	self.mu.Lock()
 
-	log.Trace("have request type", "msg", msg, "currentjobs", self.currentJobs)
+	log.Trace("have request type", "msg", msg, "currentjobs", self.currentJobs, "ourdifficulty", self.maxDifficulty, "peer", p)
 	if self.maxDifficulty < msg.Difficulty {
 		self.mu.Unlock()
 		log.Debug("too hard!")
@@ -186,10 +186,12 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 }
 
 func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) error {
+	self.mu.RLock()
+	defer self.mu.RUnlock()
 	if self.maxDifficulty > 0 {
 		log.Trace("ignored result type", "msg", msg)
 	}
-	log.Trace("got result type", "msg", msg)
+	log.Trace("got result type", "msg", msg, "peer", p)
 
 	return nil
 }

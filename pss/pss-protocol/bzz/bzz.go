@@ -187,6 +187,6 @@ func (self *PssServiceAPI) AddPeer(pubKey hexutil.Bytes, addr pss.PssAddress) er
 	var nid discover.NodeID
 	copy(nid[:], addr)
 	self.service.pssProtocol.AddPeer(p2p.NewPeer(nid, string(pubKey), []p2p.Cap{}), *self.service.Topic, true, common.ToHex(pubKey))
-	log.Info(fmt.Sprintf("adding peer %x to demoservice protocol", pubKey))
+	log.Info(fmt.Sprintf("adding peer %s to demoservice protocol", pubKey))
 	return nil
 }

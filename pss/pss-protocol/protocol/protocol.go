@@ -100,13 +100,13 @@ func (self *DemoProtocol) Init() error {
 	if self.ResultHandler == nil {
 		return errors.New("missing response handler")
 	}
-	self.Protocol.Run = self.run
+	self.Protocol.Run = self.Run
 	return nil
 }
 
-func (self *DemoProtocol) run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
+func (self *DemoProtocol) Run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	pp := protocols.NewPeer(p, rw, Spec)
-	log.Error("peer", "peer", pp, "self", self)
+	log.Info("running demo protocol on peer", "peer", pp, "self", self)
 	go self.runHook(pp)
 	dp := &DemoPeer{
 		Peer:           pp,

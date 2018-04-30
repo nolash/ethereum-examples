@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -12,9 +13,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/p2p"
+	swarmapi "github.com/ethereum/go-ethereum/swarm/api"
+	//	"github.com/ethereum/go-ethereum/swarm/network"
 
+	"./bzz"
 	"./service"
 )
 
@@ -73,14 +79,36 @@ func main() {
 		return
 	}
 
-	// create the demo service and register it with the node stack
+	// create the demo service, but now we don't register it directly
+	// so we avoid the protocol running on the direct connected peers
 	svc := service.NewDemoService(20, 3, time.Second)
+
+	// create the pss service that wraps the demo protocol
+	privkey, err := crypto.GenerateKey()
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
+	bzzCfg := swarmapi.NewConfig()
+	bzzCfg.SyncEnabled = false
+	bzzCfg.Port = *bzzport
+	bzzCfg.Path = datadir
+	bzzCfg.HiveParams.Discovery = true
+	bzzCfg.Init(privkey)
+
+	bzzSvc, err := bzz.NewPssService(bzzCfg, svc)
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
+
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-		return svc, nil
+		return bzzSvc, nil
 	}); err != nil {
 		log.Error(err.Error())
 		return
 	}
+
 	if err := stack.Start(); err != nil {
 		log.Error(err.Error())
 		return
@@ -88,16 +116,19 @@ func main() {
 	defer stack.Stop()
 
 	// determine whether we are worker or moocher
-	var central []byte
+	var central string
+	var centralKey string
 	lockfile, err := os.Open(lockFilename)
 	if err == nil {
 		defer lockfile.Close()
-		central, err = ioutil.ReadAll(lockfile)
+		in, err := ioutil.ReadAll(lockfile)
 		if err != nil {
 			log.Error("lockfile set but cant read")
 			return
 		}
-		svc.SetDifficulty(0)
+		out := strings.Split(string(in), "|")
+		central = out[0]
+		centralKey = string(out[1])
 		lockfile.Close()
 	} else {
 		lockfile, err = os.Create(lockFilename)
@@ -108,8 +139,12 @@ func main() {
 		defer os.RemoveAll(lockfile.Name())
 		defer lockfile.Close()
 		me := stack.Server().Self().String()
-		c, err := lockfile.Write([]byte(me))
-		if err != nil || c != len(me) {
+
+		buf := bytes.NewBufferString(me)
+		buf.Write([]byte("|"))
+		buf.Write([]byte(bzzCfg.PublicKey))
+		c, err := lockfile.Write(buf.Bytes())
+		if err != nil || c != buf.Len() {
 			log.Error("lock write fail", "err", err)
 			return
 		}
@@ -126,6 +161,7 @@ func main() {
 
 	// if a moocher, connect to the worker
 	// protocol will start, and start a ticker submitting jobs
+	// notice that we now do this with the pss add call
 	if len(central) != 0 {
 		log.Info("connecting", "peer", central)
 		err := client.Call(nil, "admin_addPeer", string(central))
@@ -133,6 +169,26 @@ func main() {
 			log.Error("addpeer fail", "err", err)
 			return
 		}
+		log.Info("connecting pss peer", "peer", "0x")
+		time.Sleep(time.Millisecond * 250)
+		var peers []p2p.PeerInfo
+		err = client.Call(&peers, "admin_peers")
+		if err != nil {
+			log.Error("peerinfo fail", "err", err)
+			return
+		}
+		// assume first is the worker
+		bzzaddr, ok := peers[0].Protocols["hive"].(map[string]interface{})
+		if !ok {
+			log.Error("no bzzaddr on peer")
+			return
+		}
+		err = client.Call(nil, "demops_addPeer", centralKey, bzzaddr["OAddr"])
+		if err != nil {
+			log.Error("pss addpeer fail", "err", err)
+			return
+		}
+
 	}
 
 	sigC := make(chan os.Signal)

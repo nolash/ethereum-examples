@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
@@ -86,82 +85,8 @@ func main() {
 		return
 	}
 	defer stack.Stop()
-
-	// determine whether we are worker or moocher
-	var central []byte
-	lockfile, err := os.Open(lockFilename)
-	if err == nil {
-		defer lockfile.Close()
-		central, err = ioutil.ReadAll(lockfile)
-		if err != nil {
-			log.Error("lockfile set but cant read")
-			return
-		}
-		svc.SetDifficulty(0)
-		lockfile.Close()
-	} else {
-		lockfile, err = os.Create(lockFilename)
-		if err != nil {
-			log.Error("lock create fail", "err", err)
-			return
-		}
-		defer os.RemoveAll(lockfile.Name())
-		defer lockfile.Close()
-		me := stack.Server().Self().String()
-		c, err := lockfile.Write([]byte(me))
-		if err != nil || c != len(me) {
-			log.Error("lock write fail", "err", err)
-			return
-		}
-		lockfile.Close()
-	}
-
-	// get the rpc
-	client, err := stack.Attach()
-	if err != nil {
-		log.Error("get rpc fail", "err", err)
-		return
-	}
-	defer client.Close()
-
-	// if a moocher, connect to the worker
-	// protocol will start, and start a ticker submitting jobs
-	if len(central) != 0 {
-		log.Info("connecting", "peer", central)
-		err := client.Call(nil, "admin_addPeer", string(central))
-		if err != nil {
-			log.Error("addpeer fail", "err", err)
-			return
-		}
-	}
-
 	sigC := make(chan os.Signal)
 	signal.Notify(sigC, syscall.SIGINT)
-
-	if !svc.IsWorker() {
-		go func() {
-			t := time.NewTicker(submitInterval)
-			for {
-				select {
-				case <-t.C:
-					data := make([]byte, 64)
-					rand.Read(data)
-					difficulty := rand.Intn(maxDifficulty-minDifficulty) + minDifficulty
-					var id uint64
-					err := client.Call(&id, "demo_submit", data, difficulty)
-					if err != nil {
-						log.Warn("job not accepted", "err", err)
-					} else {
-						log.Info("job submitted", "id", id)
-					}
-				case <-sigC:
-					t.Stop()
-					return
-				}
-			}
-
-		}()
-	}
 
 	<-sigC
 }

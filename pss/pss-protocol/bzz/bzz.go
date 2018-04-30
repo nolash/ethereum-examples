@@ -89,8 +89,7 @@ func NewPssService(cfg *swarmapi.Config, demo *service.DemoService) (*PssService
 	})
 
 	// pss
-	pssparams := pss.NewPssParams()
-	pssparams.Init(privkey)
+	pssparams := pss.NewPssParams().WithPrivateKey(privkey)
 	self.ps, err = pss.NewPss(to, pssparams)
 	if err != nil {
 		return nil, err

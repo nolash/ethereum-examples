@@ -1,11 +1,9 @@
 package main
 
 import (
-	"bytes"
 	"flag"
 	"fmt"
 	"io/ioutil"
-	"math/rand"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,9 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
-	"github.com/ethereum/go-ethereum/p2p"
 	swarmapi "github.com/ethereum/go-ethereum/swarm/api"
-	//	"github.com/ethereum/go-ethereum/swarm/network"
 
 	"./bzz"
 	"./service"
@@ -114,110 +110,7 @@ func main() {
 		return
 	}
 	defer stack.Stop()
-
-	// determine whether we are worker or moocher
-	var central string
-	var centralKey string
-	lockfile, err := os.Open(lockFilename)
-	if err == nil {
-		defer lockfile.Close()
-		in, err := ioutil.ReadAll(lockfile)
-		if err != nil {
-			log.Error("lockfile set but cant read")
-			return
-		}
-		out := strings.Split(string(in), "|")
-		central = out[0]
-		centralKey = string(out[1])
-		lockfile.Close()
-	} else {
-		lockfile, err = os.Create(lockFilename)
-		if err != nil {
-			log.Error("lock create fail", "err", err)
-			return
-		}
-		defer os.RemoveAll(lockfile.Name())
-		defer lockfile.Close()
-		me := stack.Server().Self().String()
-
-		buf := bytes.NewBufferString(me)
-		buf.Write([]byte("|"))
-		buf.Write([]byte(bzzCfg.PublicKey))
-		c, err := lockfile.Write(buf.Bytes())
-		if err != nil || c != buf.Len() {
-			log.Error("lock write fail", "err", err)
-			return
-		}
-		lockfile.Close()
-	}
-
-	// get the rpc
-	client, err := stack.Attach()
-	if err != nil {
-		log.Error("get rpc fail", "err", err)
-		return
-	}
-	defer client.Close()
-
-	// if a moocher, connect to the worker
-	// protocol will start, and start a ticker submitting jobs
-	// notice that we now do this with the pss add call
-	if len(central) != 0 {
-		log.Info("connecting", "peer", central)
-		err := client.Call(nil, "admin_addPeer", string(central))
-		if err != nil {
-			log.Error("addpeer fail", "err", err)
-			return
-		}
-		log.Info("connecting pss peer", "peer", "0x")
-		time.Sleep(time.Millisecond * 250)
-		var peers []p2p.PeerInfo
-		err = client.Call(&peers, "admin_peers")
-		if err != nil {
-			log.Error("peerinfo fail", "err", err)
-			return
-		}
-		// assume first is the worker
-		bzzaddr, ok := peers[0].Protocols["hive"].(map[string]interface{})
-		if !ok {
-			log.Error("no bzzaddr on peer")
-			return
-		}
-		err = client.Call(nil, "demops_addPeer", centralKey, bzzaddr["OAddr"])
-		if err != nil {
-			log.Error("pss addpeer fail", "err", err)
-			return
-		}
-
-	}
-
 	sigC := make(chan os.Signal)
 	signal.Notify(sigC, syscall.SIGINT)
-
-	if !svc.IsWorker() {
-		go func() {
-			t := time.NewTicker(submitInterval)
-			for {
-				select {
-				case <-t.C:
-					data := make([]byte, 64)
-					rand.Read(data)
-					difficulty := rand.Intn(maxDifficulty-minDifficulty) + minDifficulty
-					var id uint64
-					err := client.Call(&id, "demo_submit", data, difficulty)
-					if err != nil {
-						log.Warn("job not accepted", "err", err)
-					} else {
-						log.Info("job submitted", "id", id)
-					}
-				case <-sigC:
-					t.Stop()
-					return
-				}
-			}
-
-		}()
-	}
-
 	<-sigC
 }

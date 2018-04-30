@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"../minipow"
+	"./minipow"
 )
 
 var (

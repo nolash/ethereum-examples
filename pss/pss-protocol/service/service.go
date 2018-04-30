@@ -48,10 +48,6 @@ func NewDemoService(maxDifficulty uint8, maxJobs int, maxTimePerJob time.Duratio
 	}
 }
 
-func (self *DemoService) SetDifficulty(d uint8) {
-	self.maxDifficulty = d
-}
-
 func (self *DemoService) IsWorker() bool {
 	return self.maxDifficulty > 0
 }
@@ -93,7 +89,9 @@ func (self *DemoService) Stop() error {
 
 // hook to run when protocol starts on a peer
 func (self *DemoService) Run(p *protocols.Peer) error {
-	log.Info("run protocol hook", "peer", p)
+	self.mu.RLock()
+	log.Info("run protocol hook", "peer", p, "difficulty", self.maxDifficulty)
+	defer self.mu.RUnlock()
 	go p.Send(&protocol.Skills{
 		Difficulty: self.maxDifficulty,
 	})

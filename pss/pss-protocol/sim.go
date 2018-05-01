@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"math/rand"
+	"net/http"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -44,7 +45,7 @@ func init() {
 
 func main() {
 	a := adapters.NewSimAdapter(newServices())
-	//a, err := adapters.NewDockerAdapter("")
+	//	a, err := adapters.NewDockerAdapter()
 	//	if err != nil {
 	//		log.Crit(err.Error())
 	//	}
@@ -74,7 +75,6 @@ func main() {
 	}
 
 	quitC := make(chan struct{})
-	trigger := make(chan discover.NodeID)
 	events := make(chan *simulations.Event)
 	sub := n.Events().Subscribe(events)
 	// event sink on quit
@@ -88,72 +88,48 @@ func main() {
 		return
 	}()
 
-	action := func(ctx context.Context) error {
-		for i, nid := range nids {
-			go func() {
-				defer func() {
-					trigger <- nid
-				}()
-				client, err := n.GetNode(nid).Client()
-				if err != nil {
+	for i, nid := range nids {
+		if i == 0 {
+			continue
+		}
+		go func() {
+			client, err := n.GetNode(nid).Client()
+			if err != nil {
+				return
+			}
+			err = client.Call(nil, "demo_setDifficulty", 0)
+			if err != nil {
+				return
+			}
+			tick := time.NewTicker(time.Millisecond * 500)
+			for {
+				select {
+				case e := <-events:
+					if e.Type == simulations.EventTypeMsg {
+						log.Info("got message", "e", e)
+					}
+
+				case <-quitC:
 					return
+				case <-tick.C:
 				}
-				if i != 0 {
-					err := client.Call(nil, "demo_setDifficulty", 0)
-					if err != nil {
-						return
-					}
-				}
-				tick := time.NewTicker(time.Millisecond * 500)
-				for {
-					select {
-					case e := <-events:
-						if e.Type == simulations.EventTypeMsg {
-							log.Info("got message", "e", e)
-						}
+				data := make([]byte, 64)
+				rand.Read(data)
+				difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
 
-					case <-quitC:
-						return
-					case <-tick.C:
-					}
-					data := make([]byte, 64)
-					rand.Read(data)
-					difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
-
-					var id uint64
-					err := client.Call(&id, "demo_submit", data, difficulty)
-					if err != nil {
-						log.Warn("job not accepted", "err", err)
-					} else {
-						log.Info("job submitted", "id", id)
-					}
+				var id uint64
+				err := client.Call(&id, "demo_submit", data, difficulty)
+				if err != nil {
+					log.Warn("job not accepted", "err", err)
+				} else {
+					log.Info("job submitted", "id", id)
 				}
-			}()
-		}
-		return nil
-	}
-	check := func(ctx context.Context, nid discover.NodeID) (bool, error) {
-		select {
-		case <-ctx.Done():
-		default:
-		}
-		return true, nil
+			}
+		}()
 	}
 
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second*60)
-	defer cancel()
-	sim := simulations.NewSimulation(n)
-	step := sim.Run(ctx, &simulations.Step{
-		Action:  action,
-		Trigger: nil,
-		Expect: &simulations.Expectation{
-			Nodes: nids,
-			Check: check,
-		},
-	})
-	if step.Error != nil {
-		log.Error(step.Error.Error())
-	}
+	http.ListenAndServe(":8888", simulations.NewServer(n))
+
 	return
 }
 

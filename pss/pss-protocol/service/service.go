@@ -14,48 +14,51 @@ import (
 	"../protocol"
 )
 
-const (
-	defaultSubmitsDelay    = time.Second
-	defaultSubmitsCapacity = 1000
-	defaultResultsCapacity = 1000
-)
-
 // DemoService implements the node.Service interface
-// TODO: Extract request and result caches in separate objects to make more legible
 type DemoService struct {
-	maxJobs         int                          // maximum number of simultaneous hashing jobs the node will accept
-	currentJobs     int                          // how many jobs currently executing
-	maxDifficulty   uint8                        // the maximum difficulty of jobs this node will handle
-	maxTimePerJob   time.Duration                // maximum time one hashing job will run
-	workers         map[*protocols.Peer]uint8    // an address book of hasher peers for nodes that send requests
-	submitLastId    uint64                       // last request id sent from this node
-	submits         []*protocol.Request          // a wrapping array cache of requests used to retrieve the request data on a result response
-	submitsCursor   int                          // the current write position on the wrapping array cache
-	submitsIdx      map[uint64]*protocol.Request // index to look up the request cache though a request id
-	submitsCapacity int                          // size of request cache (wrap threshold)
-	results         map[uint64]*protocol.Result  // hashing nodes store the results here, while awaiting ack of reception by requester
-	resultsCounter  int                          // amount of results stored in resultsCounter
-	resultsCapacity int
 
+	// worker mode params
+	maxJobs       int           // maximum number of simultaneous hashing jobs the node will accept
+	currentJobs   int           // how many jobs currently executing
+	maxDifficulty uint8         // the maximum difficulty of jobs this node will handle
+	maxTimePerJob time.Duration // maximum time one hashing job will run
+
+	// moocher mode params
+	workers map[*protocols.Peer]uint8 // an address book of hasher peers for nodes that send requests
+
+	submits *submitStore
+	results *resultStore
+
+	// internal control stuff
 	mu     sync.RWMutex
 	ctx    context.Context
 	cancel func()
 }
 
-func NewDemoService(maxDifficulty uint8, maxJobs int, maxTimePerJob time.Duration) *DemoService {
+type DemoServiceParams struct {
+	MaxDifficulty uint8
+	MaxJobs       int
+	MaxTimePerJob time.Duration
+	ResultSink    ResultSinkFunc
+}
+
+func NewDemoServiceParams(sinkFunc ResultSinkFunc) *DemoServiceParams {
+	return &DemoServiceParams{
+		ResultSink: sinkFunc,
+	}
+}
+
+func NewDemoService(params *DemoServiceParams) *DemoService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DemoService{
-		maxJobs:         maxJobs,
-		maxDifficulty:   maxDifficulty,
-		maxTimePerJob:   maxTimePerJob,
-		ctx:             ctx,
-		cancel:          cancel,
-		workers:         make(map[*protocols.Peer]uint8),
-		submits:         make([]*protocol.Request, defaultSubmitsCapacity),
-		submitsIdx:      make(map[uint64]*protocol.Request),
-		submitsCapacity: defaultSubmitsCapacity,
-		results:         make(map[uint64]*protocol.Result),
-		resultsCapacity: defaultResultsCapacity,
+		maxJobs:       params.MaxJobs,
+		maxDifficulty: params.MaxDifficulty,
+		maxTimePerJob: params.MaxTimePerJob,
+		workers:       make(map[*protocols.Peer]uint8),
+		submits:       newSubmitStore(),
+		results:       newResultStore(params.ResultSink),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -124,10 +127,8 @@ func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (uint64, e
 	if p == nil {
 		return 0, fmt.Errorf("Couldn't find any workers for difficulty %d", difficulty)
 	}
-	defer func() {
-		self.submitLastId++
-		self.mu.Unlock()
-	}()
+	id := self.submits.IncId()
+	self.mu.Unlock()
 	go func(id uint64) {
 		req := &protocol.Request{
 			Id:         id,
@@ -135,34 +136,12 @@ func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (uint64, e
 			Difficulty: difficulty,
 		}
 		if err := p.Send(req); err == nil {
-			self.addSubmitsEntry(req)
+			if err := self.submits.Put(req, id); err != nil {
+				log.Error("submits put fail", "err", err)
+			}
 		}
-	}(self.submitLastId)
-	return self.submitLastId, nil
-}
-
-// add submits to entry cache
-func (self *DemoService) addSubmitsEntry(req *protocol.Request) {
-	self.submitsCursor++
-	self.submitsCursor %= self.submitsCapacity
-	if self.submits[self.submitsCursor] != nil {
-		delete(self.submitsIdx, self.submits[self.submitsCursor].Id)
-	}
-	self.submits[self.submitsCursor] = req
-	self.submitsIdx[req.Id] = req
-}
-
-func (self *DemoService) addResultsEntry(res *protocol.Result) {
-	self.results[res.Id] = res
-	self.resultsCounter++
-}
-
-func (self *DemoService) getResultsEntry(id uint64) *protocol.Result {
-	return self.results[id]
-}
-
-func (self *DemoService) deleteResultsEntry(id uint64) {
-	delete(self.results, id)
+	}(id)
+	return id, nil
 }
 
 func (self *DemoService) skillsHandlerLocked(msg *protocol.Skills, p *protocols.Peer) error {
@@ -182,11 +161,7 @@ func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.
 	switch msg.Code {
 	case protocol.StatusThanksABunch:
 		if self.IsWorker() {
-			if _, ok := self.results[msg.Id]; ok {
-				log.Trace("deleting results entry", "id", msg.Id)
-				delete(self.results, msg.Id)
-				self.resultsCounter--
-			}
+			self.results.Del(msg.Id)
 		}
 	case protocol.StatusBusy:
 		if self.IsWorker() {
@@ -215,7 +190,7 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 
 	log.Trace("have request type", "msg", msg, "currentjobs", self.currentJobs, "ourdifficulty", self.maxDifficulty, "peer", p)
 
-	if self.currentJobs >= self.maxJobs || self.resultsCounter == self.resultsCapacity {
+	if self.currentJobs >= self.maxJobs || self.results.IsFull() {
 		go p.Send(&protocol.Status{
 			Id:   msg.Id,
 			Code: protocol.StatusBusy,
@@ -253,9 +228,8 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 			Hash:  j.Hash,
 		}
 
+		self.results.Put(res)
 		self.mu.Lock()
-		self.results[res.Id] = res
-		self.resultsCounter++
 		self.currentJobs--
 		self.mu.Unlock()
 
@@ -275,11 +249,11 @@ func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.
 	}
 	log.Trace("got result type", "msg", msg, "peer", p)
 
-	if self.submitsIdx[msg.Id] == nil {
+	if !self.submits.Have(msg.Id) {
 		log.Debug("stale or fake request id")
 		return nil // in case it's stale not fake don't punish the peer
 	}
-	if !checkJob(msg.Hash, self.submitsIdx[msg.Id].Data, msg.Nonce) {
+	if !checkJob(msg.Hash, self.submits.GetData(msg.Id), msg.Nonce) {
 		return fmt.Errorf("Got incorrect result", "p", p)
 	}
 	go p.Send(&protocol.Status{

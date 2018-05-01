@@ -21,11 +21,10 @@ import (
 )
 
 const (
-	ipcName        = "pssdemo.ipc"
-	lockFilename   = ".pssdemo-lock"
-	maxDifficulty  = 23
-	minDifficulty  = 12
-	submitInterval = time.Millisecond * 50
+	ipcName              = "pssdemo.ipc"
+	defaultMaxDifficulty = 23
+	defaultMaxJobs       = 3
+	defaultMaxTime       = time.Second
 )
 
 var (
@@ -77,7 +76,13 @@ func main() {
 
 	// create the demo service, but now we don't register it directly
 	// so we avoid the protocol running on the direct connected peers
-	svc := service.NewDemoService(20, 3, time.Second)
+	params := service.NewDemoServiceParams(func(data []byte) {
+		log.Warn("node leaking result: %v", data)
+	})
+	params.MaxJobs = defaultMaxJobs
+	params.MaxTimePerJob = defaultMaxTime
+	params.MaxDifficulty = defaultMaxDifficulty
+	svc := service.NewDemoService(params)
 
 	// create the pss service that wraps the demo protocol
 	privkey, err := crypto.GenerateKey()

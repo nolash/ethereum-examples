@@ -18,11 +18,10 @@ import (
 )
 
 const (
-	ipcName        = "pssdemo.ipc"
-	lockFilename   = ".pssdemo-lock"
-	maxDifficulty  = 23
-	minDifficulty  = 12
-	submitInterval = time.Millisecond * 50
+	ipcName              = "pssdemo.ipc"
+	defaultMaxDifficulty = 23
+	defaultMaxJobs       = 3
+	defaultMaxTime       = time.Second
 )
 
 var (
@@ -73,8 +72,16 @@ func main() {
 	}
 
 	// create the demo service and register it with the node stack
-	svc := service.NewDemoService(20, 3, time.Second)
+
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
+		params := service.NewDemoServiceParams(func(data []byte) {
+			log.Warn("node leaking result: %v", data)
+		})
+		params.MaxJobs = defaultMaxJobs
+		params.MaxTimePerJob = defaultMaxTime
+		params.MaxDifficulty = defaultMaxDifficulty
+
+		svc := service.NewDemoService(params)
 		return svc, nil
 	}); err != nil {
 		log.Error(err.Error())

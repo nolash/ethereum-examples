@@ -135,9 +135,16 @@ func main() {
 }
 
 func newServices() adapters.Services {
+	params := service.NewDemoServiceParams(func(data []byte) {
+		log.Warn("node %v leaking result: %v", node.Config.ID, data)
+	})
+	params.MaxJobs = maxJobs
+	params.MaxTimePerJob = maxTime
+	params.MaxDifficulty = maxDifficulty
+
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
-			return service.NewDemoService(maxDifficulty, maxJobs, maxTime), nil
+			return service.NewDemoService(params), nil
 		},
 	}
 }

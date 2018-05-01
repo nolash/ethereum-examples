@@ -13,6 +13,7 @@ const (
 	StatusBusy
 	StatusTooHard
 	StatusGaveup
+	StatusThanksABunch
 )
 
 const (
@@ -33,6 +34,7 @@ type Result struct {
 }
 
 type Status struct {
+	Id   uint64
 	Code uint8
 }
 

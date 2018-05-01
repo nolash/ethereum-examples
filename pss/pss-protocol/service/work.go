@@ -41,3 +41,7 @@ func doJob(ctx context.Context, rawData []byte, difficulty uint8) (*job, error) 
 	}
 	return j, nil
 }
+
+func checkJob(hash []byte, data []byte, nonce []byte) bool {
+	return minipow.Check(hash, data, nonce)
+}

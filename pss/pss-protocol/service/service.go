@@ -14,37 +14,42 @@ import (
 	"../protocol"
 )
 
-var (
-	submitsDelay = time.Second
+const (
+	defaultSubmitsDelay    = time.Second
+	defaultSubmitsCapacity = 1000
 )
 
 type DemoService struct {
-	maxJobs       int
-	currentJobs   int
-	maxDifficulty uint8
-	maxTimePerJob time.Duration
-	mu            sync.RWMutex
-	ctx           context.Context
-	cancel        func()
-	workers       map[*protocols.Peer]uint8
-	submitLastId  uint64
-	submits       []*protocol.Request
-	submitsPos    uint8
-	submitsDelay  time.Duration
-	results       []*protocol.Result
+	maxJobs         int
+	currentJobs     int
+	maxDifficulty   uint8
+	maxTimePerJob   time.Duration
+	mu              sync.RWMutex
+	ctx             context.Context
+	cancel          func()
+	workers         map[*protocols.Peer]uint8
+	submitLastId    uint64
+	submits         []*protocol.Request
+	submitsCounter  int
+	submitsIdx      map[uint64]*protocol.Request
+	submitsCapacity int
+	submitsDelay    time.Duration
+	results         []*protocol.Result
 }
 
 func NewDemoService(maxDifficulty uint8, maxJobs int, maxTimePerJob time.Duration) *DemoService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DemoService{
-		maxJobs:       maxJobs,
-		maxDifficulty: maxDifficulty,
-		maxTimePerJob: maxTimePerJob,
-		ctx:           ctx,
-		cancel:        cancel,
-		workers:       make(map[*protocols.Peer]uint8),
-		submits:       make([]*protocol.Request, 10),
-		submitsDelay:  time.Second,
+		maxJobs:         maxJobs,
+		maxDifficulty:   maxDifficulty,
+		maxTimePerJob:   maxTimePerJob,
+		ctx:             ctx,
+		cancel:          cancel,
+		workers:         make(map[*protocols.Peer]uint8),
+		submits:         make([]*protocol.Request, defaultSubmitsCapacity),
+		submitsDelay:    time.Second,
+		submitsIdx:      make(map[uint64]*protocol.Request),
+		submitsCapacity: defaultSubmitsCapacity,
 	}
 }
 
@@ -119,12 +124,30 @@ func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, e
 		self.submitLastId++
 		self.mu.Unlock()
 	}()
-	go p.Send(&protocol.Request{
-		Id:         self.submitLastId,
-		Data:       data,
-		Difficulty: difficulty,
-	})
+	go func(id uint64) {
+		req := &protocol.Request{
+			Id:         id,
+			Data:       data,
+			Difficulty: difficulty,
+		}
+		if err := p.Send(req); err == nil {
+			self.addSubmitsEntry(req)
+		}
+	}(self.submitLastId)
 	return self.submitLastId, nil
+}
+
+// add submits to entry
+func (self *DemoService) addSubmitsEntry(req *protocol.Request) {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+	self.submitsCounter++
+	self.submitsCounter %= self.submitsCapacity
+	if self.submits[self.submitsCounter] != nil {
+		delete(self.submitsIdx, self.submits[self.submitsCounter].Id)
+	}
+	self.submits[self.submitsCounter] = req
+	self.submitsIdx[req.Id] = req
 }
 
 // message handling area
@@ -149,38 +172,49 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 	if self.maxDifficulty < msg.Difficulty {
 		self.mu.Unlock()
 		log.Debug("too hard!")
-		go p.Send(&protocol.Status{Code: protocol.StatusTooHard})
+		go p.Send(&protocol.Status{
+			Id:   msg.Id,
+			Code: protocol.StatusTooHard,
+		})
 		return nil
 	}
 	if self.currentJobs >= self.maxJobs {
 		self.mu.Unlock()
 		log.Debug("too busy!")
-		go p.Send(&protocol.Status{Code: protocol.StatusBusy})
+		go p.Send(&protocol.Status{
+			Id:   msg.Id,
+			Code: protocol.StatusBusy,
+		})
 		return nil
 	}
 	self.currentJobs++
 	self.mu.Unlock()
 
-	ctx, cancel := context.WithTimeout(self.ctx, self.maxTimePerJob)
-	defer cancel()
-	j, err := doJob(ctx, msg.Data, msg.Difficulty)
+	go func(msg *protocol.Request) {
+		ctx, cancel := context.WithTimeout(self.ctx, self.maxTimePerJob)
+		defer cancel()
+		j, err := doJob(ctx, msg.Data, msg.Difficulty)
 
-	if err != nil {
-		go p.Send(&protocol.Status{Code: protocol.StatusGaveup})
-		log.Debug("too long!")
-		return nil
-	}
+		if err != nil {
+			p.Send(&protocol.Status{
+				Id:   msg.Id,
+				Code: protocol.StatusGaveup,
+			})
+			log.Debug("too long!")
+			return
+		}
 
-	go p.Send(&protocol.Result{
-		Id:    msg.Id,
-		Nonce: j.Nonce,
-		Hash:  j.Hash,
-	})
-	self.mu.Lock()
-	self.currentJobs--
-	self.mu.Unlock()
+		p.Send(&protocol.Result{
+			Id:    msg.Id,
+			Nonce: j.Nonce,
+			Hash:  j.Hash,
+		})
+		self.mu.Lock()
+		self.currentJobs--
+		self.mu.Unlock()
 
-	log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
+		log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
+	}(msg)
 
 	return nil
 }
@@ -192,6 +226,18 @@ func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) 
 		log.Trace("ignored result type", "msg", msg)
 	}
 	log.Trace("got result type", "msg", msg, "peer", p)
+
+	if self.submitsIdx[msg.Id] == nil {
+		log.Debug("stale or fake request id")
+		return nil // in case it's stale not fake don't punish the peer
+	}
+	if !checkJob(msg.Hash, self.submitsIdx[msg.Id].Data, msg.Nonce) {
+		return fmt.Errorf("Got incorrect result", "p", p)
+	}
+	go p.Send(&protocol.Status{
+		Id:   msg.Id,
+		Code: protocol.StatusThanksABunch,
+	})
 
 	return nil
 }

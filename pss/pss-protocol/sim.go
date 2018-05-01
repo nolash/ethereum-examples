@@ -57,7 +57,7 @@ func main() {
 	defer n.Shutdown()
 
 	var nids []discover.NodeID
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 2; i++ {
 		c := adapters.RandomNodeConfig()
 		nod, err := n.NewNodeWithConfig(c)
 		if err != nil {
@@ -101,12 +101,13 @@ func main() {
 			if err != nil {
 				return
 			}
-			tick := time.NewTicker(time.Millisecond * 500)
+			tick := time.NewTicker(time.Millisecond * 5000)
 			for {
 				select {
 				case e := <-events:
 					if e.Type == simulations.EventTypeMsg {
 						log.Info("got message", "e", e)
+						continue
 					}
 
 				case <-quitC:

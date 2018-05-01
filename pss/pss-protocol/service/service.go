@@ -21,6 +21,7 @@ const (
 )
 
 // DemoService implements the node.Service interface
+// TODO: Extract request and result caches in separate objects to make more legible
 type DemoService struct {
 	maxJobs         int                          // maximum number of simultaneous hashing jobs the node will accept
 	currentJobs     int                          // how many jobs currently executing
@@ -78,10 +79,10 @@ func (self *DemoService) Protocols() (protos []p2p.Protocol) {
 	if err != nil {
 		log.Crit("can't create demo protocol")
 	}
-	proto.SkillsHandler = self.skillsHandler
-	proto.StatusHandler = self.statusHandler
-	proto.RequestHandler = self.requestHandler
-	proto.ResultHandler = self.resultHandler
+	proto.SkillsHandler = self.skillsHandlerLocked
+	proto.StatusHandler = self.statusHandlerLocked
+	proto.RequestHandler = self.requestHandlerLocked
+	proto.ResultHandler = self.resultHandlerLocked
 	if err := proto.Init(); err != nil {
 		log.Crit("can't init demo protocol")
 	}
@@ -100,8 +101,8 @@ func (self *DemoService) Stop() error {
 // The protocol code provides Hook to run when protocol starts on a peer
 func (self *DemoService) Run(p *protocols.Peer) error {
 	self.mu.RLock()
-	log.Info("run protocol hook", "peer", p, "difficulty", self.maxDifficulty)
 	defer self.mu.RUnlock()
+	log.Info("run protocol hook", "peer", p, "difficulty", self.maxDifficulty)
 	go p.Send(&protocol.Skills{
 		Difficulty: self.maxDifficulty,
 	})
@@ -109,8 +110,6 @@ func (self *DemoService) Run(p *protocols.Peer) error {
 }
 
 func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
-	self.mu.RLock()
-	defer self.mu.RUnlock()
 	for p, d := range self.workers {
 		if d >= difficulty {
 			return p
@@ -119,12 +118,12 @@ func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
 	return nil
 }
 
-func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, error) {
+func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (uint64, error) {
+	self.mu.Lock()
 	p := self.getNextWorker(difficulty)
 	if p == nil {
 		return 0, fmt.Errorf("Couldn't find any workers for difficulty %d", difficulty)
 	}
-	self.mu.Lock()
 	defer func() {
 		self.submitLastId++
 		self.mu.Unlock()
@@ -144,8 +143,6 @@ func (self *DemoService) submitRequest(data []byte, difficulty uint8) (uint64, e
 
 // add submits to entry cache
 func (self *DemoService) addSubmitsEntry(req *protocol.Request) {
-	self.mu.Lock()
-	defer self.mu.Unlock()
 	self.submitsCursor++
 	self.submitsCursor %= self.submitsCapacity
 	if self.submits[self.submitsCursor] != nil {
@@ -156,38 +153,62 @@ func (self *DemoService) addSubmitsEntry(req *protocol.Request) {
 }
 
 func (self *DemoService) addResultsEntry(res *protocol.Result) {
-	self.mu.Lock()
-	defer self.mu.Unlock()
 	self.results[res.Id] = res
 	self.resultsCounter++
 }
 
 func (self *DemoService) getResultsEntry(id uint64) *protocol.Result {
-	self.mu.RLock()
-	defer self.mu.RUnlock()
 	return self.results[id]
 }
 
 func (self *DemoService) deleteResultsEntry(id uint64) {
-	self.mu.Lock()
-	defer self.mu.Unlock()
 	delete(self.results, id)
 }
 
-func (self *DemoService) skillsHandler(msg *protocol.Skills, p *protocols.Peer) error {
-	log.Trace("have skills type", "msg", msg, "peer", p)
+func (self *DemoService) skillsHandlerLocked(msg *protocol.Skills, p *protocols.Peer) error {
 	self.mu.Lock()
+	defer self.mu.Unlock()
+	log.Trace("have skills type", "msg", msg, "peer", p)
 	self.workers[p] = msg.Difficulty
-	self.mu.Unlock()
 	return nil
 }
 
-func (self *DemoService) statusHandler(msg *protocol.Status, p *protocols.Peer) error {
+func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.Peer) error {
 	log.Trace("have status type", "msg", msg, "peer", p)
+
+	self.mu.Lock()
+	defer self.mu.Unlock()
+
+	switch msg.Code {
+	case protocol.StatusThanksABunch:
+		if self.IsWorker() {
+			if _, ok := self.results[msg.Id]; ok {
+				log.Trace("deleting results entry", "id", msg.Id)
+				delete(self.results, msg.Id)
+				self.resultsCounter--
+			}
+		}
+	case protocol.StatusBusy:
+		if self.IsWorker() {
+			return nil
+		}
+		log.Trace("peer is busy. please implement throttling")
+	case protocol.StatusTooHard:
+		if self.IsWorker() {
+			return nil
+		}
+		log.Trace("we sent wrong difficulty or it changed. please implement adjusting it")
+	case protocol.StatusGaveup:
+		if self.IsWorker() {
+			return nil
+		}
+		log.Trace("peer gave up on the job. please implement how to select someone else for the job")
+	}
+
 	return nil
 }
 
-func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer) error {
+func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocols.Peer) error {
 
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -212,39 +233,41 @@ func (self *DemoService) requestHandler(msg *protocol.Request, p *protocols.Peer
 	}
 	self.currentJobs++
 
-	go func(msg *protocol.Request, lmu sync.RWMutex) {
+	go func(msg *protocol.Request) {
 		ctx, cancel := context.WithTimeout(self.ctx, self.maxTimePerJob)
 		defer cancel()
 		j, err := doJob(ctx, msg.Data, msg.Difficulty)
 
 		if err != nil {
-			p.Send(&protocol.Status{
+			go p.Send(&protocol.Status{
 				Id:   msg.Id,
 				Code: protocol.StatusGaveup,
 			})
 			log.Debug("too long!")
 			return
 		}
+
 		res := &protocol.Result{
 			Id:    msg.Id,
 			Nonce: j.Nonce,
 			Hash:  j.Hash,
 		}
-		p.Send(res)
 
-		lmu.Lock()
+		self.mu.Lock()
 		self.results[res.Id] = res
 		self.resultsCounter++
 		self.currentJobs--
-		lmu.Unlock()
+		self.mu.Unlock()
+
+		p.Send(res)
 
 		log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
-	}(msg, self.mu) // do we need to pass self.mu here?
+	}(msg) // do we need to pass self.mu here?
 
 	return nil
 }
 
-func (self *DemoService) resultHandler(msg *protocol.Result, p *protocols.Peer) error {
+func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.Peer) error {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
 	if self.maxDifficulty > 0 {

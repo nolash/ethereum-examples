@@ -10,11 +10,10 @@ import (
 
 // enumeration used in status messages
 const (
-	StatusOK = iota
+	StatusThanksABunch = iota
 	StatusBusy
 	StatusTooHard
 	StatusGaveup
-	StatusThanksABunch
 )
 
 // which hashes a hasher node offers

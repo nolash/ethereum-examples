@@ -17,7 +17,7 @@ type ResultSinkFunc func(data interface{})
 
 type resultEntry struct {
 	*protocol.Result
-	cid     string
+	cid     *string
 	expires time.Time
 }
 
@@ -26,6 +26,7 @@ type resultStore struct {
 	entries      []*resultEntry // hashing nodes store the results here, while awaiting ack of reception by requester
 	idx          map[string]int // index to look up resultentry by
 	counter      int            // amount of results stored in resultsCounter
+	capacity     int            // amount of results possible to store
 	releaseDelay time.Duration  // time before a result expires and should be passed to sinkFunc
 	sinkFunc     ResultSinkFunc // callback to pass data to when result has expired
 
@@ -41,6 +42,7 @@ func newResultStore(ctx context.Context, sinkFunc ResultSinkFunc) *resultStore {
 		entries:      make([]*resultEntry, defaultResultsCapacity),
 		idx:          make(map[string]int),
 		releaseDelay: defaultResultsReleaseDelay,
+		capacity:     defaultResultsCapacity,
 		sinkFunc:     sinkFunc,
 		ctx:          ctx,
 	}
@@ -54,7 +56,7 @@ func (self *resultStore) Put(id string, res *protocol.Result) bool {
 	}
 	self.entries[self.counter] = &resultEntry{
 		Result:  res,
-		cid:     id,
+		cid:     &id,
 		expires: time.Now().Add(self.releaseDelay),
 	}
 	self.idx[id] = self.counter
@@ -79,8 +81,8 @@ func (self *resultStore) del(id string) {
 		self.entries[i] = self.entries[self.counter-1]
 		delete(self.idx, id)
 		self.counter--
-		if self.counter > 0 {
-			self.idx[self.entries[i].cid] = i
+		if self.counter >= 0 {
+			self.idx[*self.entries[i].cid] = i
 		}
 	}
 }
@@ -98,7 +100,7 @@ func (self *resultStore) IsFull() bool {
 }
 
 func (self *resultStore) full() bool {
-	return self.counter == cap(self.entries)
+	return self.counter == self.capacity
 }
 
 func (self *resultStore) Start() {
@@ -116,15 +118,19 @@ func (self *resultStore) Start() {
 	}()
 }
 
-// BUG: goes through entries that have deleted indicies
-// protbably index shuould have expiry, not entry
+// TODO: this procedure needs priority control, so it doesn't block for too long
 func (self *resultStore) prune() {
-	c := self.Count()
-	for i := 0; i < c; i++ {
+	var keys []string
+	self.mu.Lock()
+	for k := range self.idx {
+		keys = append(keys, k)
+	}
+	self.mu.Unlock()
+	for _, k := range keys {
 		self.mu.Lock()
-		e := self.entries[i]
+		e := self.entries[self.idx[k]]
 		if e.expires.Before(time.Now()) {
-			self.del(e.cid)
+			self.del(*e.cid)
 			self.sinkFunc(e.Result)
 		}
 		self.mu.Unlock()

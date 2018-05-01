@@ -233,7 +233,7 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 func newServices() adapters.Services {
 	params := service.NewDemoServiceParams(func(data interface{}) {
 		r := data.(*protocol.Result)
-		log.Warn("leak", "id", r.Id, "hash", fmt.Sprintf("%08x", r.Hash))
+		log.Warn("leak", "id", r.Id, "hash", fmt.Sprintf("%x", r.Hash))
 	})
 	params.MaxJobs = maxJobs
 	params.MaxTimePerJob = maxTime

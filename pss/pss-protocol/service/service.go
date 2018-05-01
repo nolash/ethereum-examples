@@ -17,6 +17,7 @@ import (
 	"../protocol"
 )
 
+// TODO: Change the id to sha1(peerid|data|submits.lastid), so moocher can find it in resource updates later
 // DemoService implements the node.Service interface
 type DemoService struct {
 

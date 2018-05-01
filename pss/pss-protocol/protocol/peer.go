@@ -6,7 +6,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 )
 
-// every protocol that wants to send messages back to sender, must have a peer abstraction
+// Every protocol that wants to send messages back to sender, must have a peer abstraction
 // this is because devp2p doesn't let us know about which peer is the sender
 type DemoPeer struct {
 	*protocols.Peer
@@ -16,6 +16,7 @@ type DemoPeer struct {
 	resultHandler  func(*Result, *protocols.Peer) error
 }
 
+// Dispatcher for incoming messages
 func (self *DemoPeer) Handle(msg interface{}) error {
 	if typ, ok := msg.(*Skills); ok {
 		return self.skillsHandler(typ, self.Peer)

@@ -101,7 +101,7 @@ func main() {
 			if err != nil {
 				return
 			}
-			tick := time.NewTicker(time.Millisecond * 5000)
+			tick := time.NewTicker(time.Millisecond * 1000)
 			for {
 				select {
 				case e := <-events:

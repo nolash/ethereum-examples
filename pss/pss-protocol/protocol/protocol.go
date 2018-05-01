@@ -8,6 +8,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 )
 
+// enumeration used in status messages
 const (
 	StatusOK = iota
 	StatusBusy
@@ -16,36 +17,58 @@ const (
 	StatusThanksABunch
 )
 
+// which hashes a hasher node offers
 const (
 	HashSHA1 = iota
 )
 
+// variables shared between p2p.Protocol and protocols.Spec
 const (
 	protoName    = "demo"
 	protoVersion = 1
 	protoMax     = 2048
 )
 
-// protocol message types
-type Result struct {
-	Id    uint64
-	Nonce []byte
-	Hash  []byte
+// Skills is a protocol message type
+//
+// It is an asynchronous handshake message, signaling the state the node is in.
+// The message may be issued at any time, and receiving peers should behave accordingly
+// towards the node:
+//
+// Difficulty > 0 means it's open for hashing, and what the max difficulty is.
+//
+// MaxSize tells how many bytes can accompany one data submission
+type Skills struct {
+	Difficulty uint8
+	MaxSize    uint16
 }
 
+// Status is a protocol message type
+//
+// It is mostly used to signal errors states.
+//
+// A node also uses Status to signal successful reception of a Result message
 type Status struct {
 	Id   uint64
 	Code uint8
 }
 
+// Request is a protocol message type
+//
+// It is used by nodes to request a hashing job
 type Request struct {
 	Id         uint64
 	Data       []byte
 	Difficulty uint8
 }
 
-type Skills struct {
-	Difficulty uint8
+// Result is a protocol message type
+//
+// It is used by nodes to transmit the results of a hashing job
+type Result struct {
+	Id    uint64
+	Nonce []byte
+	Hash  []byte
 }
 
 var (
@@ -64,7 +87,10 @@ var (
 	}
 )
 
-// the protocol itself
+// The protocol object wraps the code that starts a protocol on a peer upon connection
+//
+// This implementation holds a callback function thats called upon a successful connection
+// Any logic needed to be performed in the context of the protocol's service should be put there
 type DemoProtocol struct {
 	Protocol       p2p.Protocol
 	SkillsHandler  func(*Skills, *protocols.Peer) error
@@ -76,7 +102,6 @@ type DemoProtocol struct {
 }
 
 func NewDemoProtocol(runHook func(*protocols.Peer) error) (*DemoProtocol, error) {
-
 	proto := &DemoProtocol{
 		Protocol: p2p.Protocol{
 			Name:    protoName,
@@ -89,6 +114,7 @@ func NewDemoProtocol(runHook func(*protocols.Peer) error) (*DemoProtocol, error)
 	return proto, nil
 }
 
+// TODO: double-check if we need the Init detached
 func (self *DemoProtocol) Init() error {
 	if self.SkillsHandler == nil {
 		return errors.New("missing skills handler")
@@ -106,6 +132,9 @@ func (self *DemoProtocol) Init() error {
 	return nil
 }
 
+// This method is run on every new peer connection
+//
+// It enters a loop that takes care of dispatching and receiving messages
 func (self *DemoProtocol) Run(p *p2p.Peer, rw p2p.MsgReadWriter) error {
 	pp := protocols.NewPeer(p, rw, Spec)
 	log.Info("running demo protocol on peer", "peer", pp, "self", self)

@@ -2,12 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha1"
+	"encoding/binary"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
+	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -56,7 +59,7 @@ func NewDemoService(params *DemoServiceParams) *DemoService {
 		maxTimePerJob: params.MaxTimePerJob,
 		workers:       make(map[*protocols.Peer]uint8),
 		submits:       newSubmitStore(),
-		results:       newResultStore(params.ResultSink),
+		results:       newResultStore(ctx, params.ResultSink),
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -93,6 +96,7 @@ func (self *DemoService) Protocols() (protos []p2p.Protocol) {
 }
 
 func (self *DemoService) Start(srv *p2p.Server) error {
+	self.results.Start()
 	return nil
 }
 
@@ -161,7 +165,7 @@ func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.
 	switch msg.Code {
 	case protocol.StatusThanksABunch:
 		if self.IsWorker() {
-			self.results.Del(msg.Id)
+			self.results.Del(newCacheId(p.ID(), msg.Id))
 		}
 	case protocol.StatusBusy:
 		if self.IsWorker() {
@@ -228,7 +232,8 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 			Hash:  j.Hash,
 		}
 
-		self.results.Put(res)
+		cid := newCacheId(p.ID(), res.Id)
+		self.results.Put(cid, res)
 		self.mu.Lock()
 		self.currentJobs--
 		self.mu.Unlock()
@@ -262,4 +267,14 @@ func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.
 	})
 
 	return nil
+}
+
+func newCacheId(pid discover.NodeID, id uint64) string {
+	c := make([]byte, 8)
+	binary.LittleEndian.PutUint64(c, id)
+	h := sha1.New()
+	h.Write(pid[:])
+	h.Write(c)
+	return fmt.Sprintf("%x", h.Sum(nil))
+
 }

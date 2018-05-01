@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -12,55 +13,75 @@ const (
 	defaultResultsReleaseDelay = time.Second
 )
 
-type ResultSinkFunc func(data []byte)
+type ResultSinkFunc func(data interface{})
 
 type resultEntry struct {
+	*protocol.Result
+	cid     string
 	expires time.Time
-	result  *protocol.Result
 }
 
 type resultStore struct {
 	// handle results
-	entries      map[uint64]*protocol.Result // hashing nodes store the results here, while awaiting ack of reception by requester
-	counter      int                         // amount of results stored in resultsCounter
-	capacity     int
-	releaseDelay time.Duration
+	entries      []*resultEntry // hashing nodes store the results here, while awaiting ack of reception by requester
+	idx          map[string]int // index to look up resultentry by
+	counter      int            // amount of results stored in resultsCounter
+	releaseDelay time.Duration  // time before a result expires and should be passed to sinkFunc
 	sinkFunc     ResultSinkFunc // callback to pass data to when result has expired
 
-	mu sync.RWMutex
+	mu  sync.RWMutex
+	ctx context.Context
 }
 
-func newResultStore(sinkFunc ResultSinkFunc) *resultStore {
+func newResultStore(ctx context.Context, sinkFunc ResultSinkFunc) *resultStore {
 	if sinkFunc == nil {
 		panic("yikes, resultsStore.sinkFunc is nil")
 	}
 	return &resultStore{
-		entries:      make(map[uint64]*protocol.Result),
-		capacity:     defaultResultsCapacity,
+		entries:      make([]*resultEntry, defaultResultsCapacity),
+		idx:          make(map[string]int),
 		releaseDelay: defaultResultsReleaseDelay,
 		sinkFunc:     sinkFunc,
+		ctx:          ctx,
 	}
 }
 
-func (self *resultStore) Put(res *protocol.Result) {
+func (self *resultStore) Put(id string, res *protocol.Result) bool {
 	self.mu.Lock()
 	defer self.mu.Unlock()
-	self.entries[res.Id] = res
+	if self.full() {
+		return false
+	}
+	self.entries[self.counter] = &resultEntry{
+		Result:  res,
+		cid:     id,
+		expires: time.Now().Add(self.releaseDelay),
+	}
+	self.idx[id] = self.counter
 	self.counter++
+	return true
 }
 
-func (self *resultStore) Get(id uint64) *protocol.Result {
+func (self *resultStore) Get(id string) *protocol.Result {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
-	return self.entries[id]
+	return self.entries[self.idx[id]].Result
 }
 
-func (self *resultStore) Del(id uint64) {
+func (self *resultStore) Del(id string) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
-	if _, ok := self.entries[id]; ok {
-		delete(self.entries, id)
+	self.del(id)
+}
+
+func (self *resultStore) del(id string) {
+	if i, ok := self.idx[id]; ok {
+		self.entries[i] = self.entries[self.counter-1]
+		delete(self.idx, id)
 		self.counter--
+		if self.counter > 0 {
+			self.idx[self.entries[i].cid] = i
+		}
 	}
 }
 
@@ -73,17 +94,39 @@ func (self *resultStore) Count() int {
 func (self *resultStore) IsFull() bool {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
-	return self.counter == self.capacity
+	return self.full()
 }
 
-func (self *resultStore) start() {
-
+func (self *resultStore) full() bool {
+	return self.counter == cap(self.entries)
 }
 
-func (self *resultStore) stop() {
-
+func (self *resultStore) Start() {
+	go func() {
+		for {
+			timer := time.NewTimer(self.releaseDelay)
+			select {
+			case <-self.ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+			self.prune()
+		}
+	}()
 }
 
+// BUG: goes through entries that have deleted indicies
+// protbably index shuould have expiry, not entry
 func (self *resultStore) prune() {
-
+	c := self.Count()
+	for i := 0; i < c; i++ {
+		self.mu.Lock()
+		e := self.entries[i]
+		if e.expires.Before(time.Now()) {
+			self.del(e.cid)
+			self.sinkFunc(e.Result)
+		}
+		self.mu.Unlock()
+	}
 }

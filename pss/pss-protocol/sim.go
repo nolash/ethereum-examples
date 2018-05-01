@@ -14,6 +14,7 @@ import (
 
 	colorable "github.com/mattn/go-colorable"
 
+	"./protocol"
 	"./service"
 )
 
@@ -57,7 +58,7 @@ func main() {
 	defer n.Shutdown()
 
 	var nids []discover.NodeID
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 5; i++ {
 		c := adapters.RandomNodeConfig()
 		nod, err := n.NewNodeWithConfig(c)
 		if err != nil {
@@ -93,6 +94,7 @@ func main() {
 			continue
 		}
 		go func() {
+			var count int
 			client, err := n.GetNode(nid).Client()
 			if err != nil {
 				return
@@ -101,7 +103,7 @@ func main() {
 			if err != nil {
 				return
 			}
-			tick := time.NewTicker(time.Millisecond * 1000)
+			tick := time.NewTicker(time.Millisecond * 100)
 			for {
 				select {
 				case e := <-events:
@@ -113,6 +115,12 @@ func main() {
 				case <-quitC:
 					return
 				case <-tick.C:
+					if count > 5 {
+						n.Stop(nid)
+						tick.Stop()
+						return
+					}
+					count++
 				}
 				data := make([]byte, 64)
 				rand.Read(data)
@@ -135,8 +143,9 @@ func main() {
 }
 
 func newServices() adapters.Services {
-	params := service.NewDemoServiceParams(func(data []byte) {
-		log.Warn("node %v leaking result: %v", node.Config.ID, data)
+	params := service.NewDemoServiceParams(func(data interface{}) {
+		r := data.(*protocol.Result)
+		log.Warn("node leaking result", "id", r.Id)
 	})
 	params.MaxJobs = maxJobs
 	params.MaxTimePerJob = maxTime

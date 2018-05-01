@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
+	"fmt"
 	"math/rand"
 	"time"
 
@@ -230,8 +231,9 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 }
 
 func newServices() adapters.Services {
-	params := service.NewDemoServiceParams(func(data []byte) {
-		log.Warn("node %v leaking result: %v", node.Config.ID, data)
+	params := service.NewDemoServiceParams(func(data interface{}) {
+		r := data.(*protocol.Result)
+		log.Warn("leak", "id", r.Id, "hash", fmt.Sprintf("%08x", r.Hash))
 	})
 	params.MaxJobs = maxJobs
 	params.MaxTimePerJob = maxTime
@@ -239,12 +241,13 @@ func newServices() adapters.Services {
 
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
-			svc := service.NewDemoService(maxDifficulty, maxJobs, maxTime)
-			return svc, nil
+			//	svc := service.NewDemoService(params)
+			// return svc, nil
+			return nil, nil
 		},
 		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
 			// create the pss service that wraps the demo protocol
-			svc := service.NewDemoService(maxDifficulty, maxJobs, maxTime)
+			svc := service.NewDemoService(params)
 			bzzCfg := swarmapi.NewConfig()
 			bzzCfg.SyncEnabled = false
 			//bzzCfg.Port = *bzzport

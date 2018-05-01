@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/node"
 
+	"./protocol"
 	"./service"
 )
 
@@ -74,8 +75,10 @@ func main() {
 	// create the demo service and register it with the node stack
 
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
-		params := service.NewDemoServiceParams(func(data []byte) {
-			log.Warn("node leaking result: %v", data)
+
+		params := service.NewDemoServiceParams(func(data interface{}) {
+			r := data.(*protocol.Result)
+			log.Warn("node leaking result", "id", r.Id)
 		})
 		params.MaxJobs = defaultMaxJobs
 		params.MaxTimePerJob = defaultMaxTime

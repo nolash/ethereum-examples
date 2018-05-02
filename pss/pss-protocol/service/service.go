@@ -20,6 +20,9 @@ import (
 // DemoService implements the node.Service interface
 type DemoService struct {
 
+	//
+	id []byte
+
 	// worker mode params
 	maxJobs       int           // maximum number of simultaneous hashing jobs the node will accept
 	currentJobs   int           // how many jobs currently executing
@@ -39,6 +42,7 @@ type DemoService struct {
 }
 
 type DemoServiceParams struct {
+	Id            []byte
 	MaxDifficulty uint8
 	MaxJobs       int
 	MaxTimePerJob time.Duration
@@ -54,6 +58,7 @@ func NewDemoServiceParams(sinkFunc ResultSinkFunc) *DemoServiceParams {
 func NewDemoService(params *DemoServiceParams) *DemoService {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &DemoService{
+		id:            params.Id,
 		maxJobs:       params.MaxJobs,
 		maxDifficulty: params.MaxDifficulty,
 		maxTimePerJob: params.MaxTimePerJob,
@@ -264,7 +269,6 @@ func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.
 		Id:   msg.Id,
 		Code: protocol.StatusThanksABunch,
 	})
-
 	return nil
 }
 

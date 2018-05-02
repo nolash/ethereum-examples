@@ -2,8 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -62,8 +60,6 @@ func (self *resultStore) Put(id protocol.ID, res *protocol.Result) bool {
 		expires: time.Now().Add(self.releaseDelay),
 	}
 	self.idx.Store(id, self.counter)
-	//self.idx[id] = self.counter
-	fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>> adding %x idx %d\n", id, self.counter)
 	self.counter++
 	return true
 }
@@ -86,11 +82,13 @@ func (self *resultStore) Del(id protocol.ID) {
 
 func (self *resultStore) del(id protocol.ID) {
 	if n, ok := self.idx.Load(id); ok {
-		fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>>> removing %x idx %d\n", id, n.(int))
-		self.entries[n.(int)] = self.entries[self.counter-1]
 		self.idx.Delete(id)
+		if self.counter == 0 { // reaches negative count unless this check, why?
+			return
+		}
 		self.counter--
-		if self.counter >= 0 {
+		if self.counter > 0 {
+			self.entries[n.(int)] = self.entries[self.counter]
 			self.idx.Store(self.entries[n.(int)].prid, n.(int))
 		}
 	}
@@ -129,25 +127,17 @@ func (self *resultStore) Start() {
 
 // TODO: this procedure needs priority control, so it doesn't block for too long
 func (self *resultStore) prune() {
-	self.mu.Lock()
-	var prids []protocol.ID
-	//for k, n := range self.idx {
+	i := 0
 	self.idx.Range(func(k interface{}, n interface{}) bool {
-		prids = append(prids, k.(protocol.ID))
-		fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>>>>>>>>>>>> have key %08x idx %d\n", k.(protocol.ID), n.(int))
-		return true
-	})
-	//}
-	self.mu.Unlock()
-	for _, prid := range prids {
+		i++
+		prid := k.(protocol.ID)
 		self.mu.Lock()
-		n, _ := self.idx.Load(prid)
 		e := self.entries[n.(int)]
 		if e.expires.Before(time.Now()) {
 			self.del(prid)
 			self.sinkFunc(e.Result)
 		}
 		self.mu.Unlock()
-	}
-	fmt.Fprintf(os.Stderr, ">>>>>>> prune done\n")
+		return true
+	})
 }

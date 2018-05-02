@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
 
-	//colorable "github.com/mattn/go-colorable"
+	colorable "github.com/mattn/go-colorable"
 
 	"./protocol"
 	"./service"
@@ -34,7 +34,7 @@ var (
 
 func init() {
 	log.PrintOrigins(true)
-	//log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
 
 	maxDifficulty = defaultMaxDifficulty
 	minDifficulty = defaultMinDifficulty
@@ -153,6 +153,7 @@ func newServices() adapters.Services {
 
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
+			params.Id = node.Config.ID[:]
 			return service.NewDemoService(params), nil
 		},
 	}

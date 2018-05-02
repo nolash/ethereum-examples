@@ -8,8 +8,10 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/node"
 	"github.com/ethereum/go-ethereum/p2p"
 	"github.com/ethereum/go-ethereum/p2p/discover"
+	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 	swarmapi "github.com/ethereum/go-ethereum/swarm/api"
 	"github.com/ethereum/go-ethereum/swarm/network"
@@ -18,26 +20,37 @@ import (
 	"github.com/ethereum/go-ethereum/swarm/state"
 	"github.com/ethereum/go-ethereum/swarm/storage"
 
-	"../protocol"
 	"../service"
 )
 
-type PssService struct {
-	bzz         *network.Bzz
-	lstore      *storage.LocalStore
-	ps          *pss.Pss
-	pssProtocol *pss.Protocol
-	Topic       *pss.Topic
-	streamer    *stream.Registry
-	demo        *service.DemoService
-	rh          *storage.ResourceHandler
+type SubService interface {
+	node.Service
+	Spec() *protocols.Spec
+	Protocol() *p2p.Protocol
 }
 
-func NewPssService(cfg *swarmapi.Config, demo *service.DemoService) (*PssService, error) {
+type pssDemoService struct {
+	SubService
+	protocol *pss.Protocol
+}
+
+type BzzService struct {
+	bzz        *network.Bzz
+	lstore     *storage.LocalStore
+	ps         *pss.Pss
+	pssService map[pss.Topic]*pssDemoService
+	//pssProtocol *pss.Protocol
+	//Topic       *pss.Topic
+	streamer *stream.Registry
+	demo     *service.Demo
+	rh       *storage.ResourceHandler
+}
+
+func NewBzzService(cfg *swarmapi.Config) (*BzzService, error) {
 	var err error
 
 	// master parameters
-	self := &PssService{}
+	self := &BzzService{}
 	privkey := cfg.ShiftPrivateKey()
 	kp := network.NewKadParams()
 	to := network.NewKademlia(
@@ -67,7 +80,7 @@ func NewPssService(cfg *swarmapi.Config, demo *service.DemoService) (*PssService
 		Signer: &storage.GenericResourceSigner{
 			PrivKey: privkey,
 		},
-		//EthClient: storage.NewBlockEstimator(),
+		EthClient: storage.NewBlockEstimator(),
 	}
 	self.rh, err = storage.NewResourceHandler(rhparams)
 	if err != nil {
@@ -94,6 +107,7 @@ func NewPssService(cfg *swarmapi.Config, demo *service.DemoService) (*PssService
 	if err != nil {
 		return nil, err
 	}
+	self.pssService = make(map[pss.Topic]*pssDemoService)
 
 	// bzz protocol
 	bzzconfig := &network.BzzConfig{
@@ -103,43 +117,49 @@ func NewPssService(cfg *swarmapi.Config, demo *service.DemoService) (*PssService
 	}
 	self.bzz = network.NewBzz(bzzconfig, to, stateStore, stream.Spec, self.streamer.Run)
 
-	// the demoservice
-	underlyingProtocol := demo.Protocols()[0]
-	topic := pss.BytesToTopic([]byte(protocol.Spec.Name))
-	self.Topic = &topic
-	self.pssProtocol, err = pss.RegisterProtocol(self.ps, self.Topic, protocol.Spec, &underlyingProtocol, &pss.ProtocolParams{true, true})
-	if err != nil {
-		return nil, fmt.Errorf("register pss protocol fail: %v", err)
-	}
-	self.ps.Register(self.Topic, self.pssProtocol.Handle)
-	self.demo = demo
 	return self, nil
 }
 
-func (self *PssService) Protocols() (protos []p2p.Protocol) {
-	//protos = append(protos, self.bzz.Protocols()...)
+func (self *BzzService) RegisterPssProtocol(psssvc SubService) error {
+	spec := psssvc.Spec()
+	topic := pss.BytesToTopic([]byte(fmt.Sprintf("%s:%d", spec.Name, spec.Version)))
+	psp, err := pss.RegisterProtocol(self.ps, &topic, spec, psssvc.Protocol(), &pss.ProtocolParams{true, true})
+	if err != nil {
+		return fmt.Errorf("register pss protocol fail: %v", err)
+	}
+	self.pssService[topic] = &pssDemoService{
+		SubService: psssvc,
+		protocol:   psp,
+	}
+	self.ps.Register(&topic, psp.Handle)
+	return nil
+}
+
+func (self *BzzService) Protocols() (protos []p2p.Protocol) {
 	protos = append(protos, self.bzz.Protocols()[0])
 	protos = append(protos, self.bzz.Protocols()[1])
 	protos = append(protos, self.ps.Protocols()...)
 	return
 }
 
-func (self *PssService) APIs() []rpc.API {
+func (self *BzzService) APIs() []rpc.API {
 	apis := []rpc.API{
 		{
-			Namespace: "demops",
+			Namespace: "pss",
 			Version:   "1.0",
-			Service:   newPssServiceAPI(self),
+			Service:   newBzzServiceAPI(self),
 			Public:    true,
 		},
 	}
 	apis = append(apis, self.bzz.APIs()...)
 	apis = append(apis, self.ps.APIs()...)
-	apis = append(apis, self.demo.APIs()...)
+	for _, a := range self.pssService {
+		apis = append(apis, a.APIs()...)
+	}
 	return apis
 }
 
-func (self *PssService) Start(srv *p2p.Server) error {
+func (self *BzzService) Start(srv *p2p.Server) error {
 	newaddr := self.bzz.UpdateLocalAddr([]byte(srv.Self().String()))
 	log.Warn("Updated bzz local addr", "oaddr", fmt.Sprintf("%x", newaddr.OAddr), "uaddr", fmt.Sprintf("%s", newaddr.UAddr))
 	err := self.bzz.Start(srv)
@@ -148,12 +168,16 @@ func (self *PssService) Start(srv *p2p.Server) error {
 	}
 	//self.streamer.Start(srv)
 	self.ps.Start(srv)
-	self.demo.Start(srv)
+	for _, psssvc := range self.pssService {
+		psssvc.Start(srv)
+	}
 	return nil
 }
 
-func (self *PssService) Stop() error {
-	self.demo.Stop()
+func (self *BzzService) Stop() error {
+	for _, psssvc := range self.pssService {
+		psssvc.Stop()
+	}
 	self.ps.Stop()
 	//self.streamer.Stop()
 	self.lstore.Close()
@@ -162,22 +186,27 @@ func (self *PssService) Stop() error {
 
 // api to interact with pss protocol
 // TODO: change protocol methods so we only have to use pss api here and remove this structure
-type PssServiceAPI struct {
-	service *PssService
+type BzzServiceAPI struct {
+	service *BzzService
 	api     *pss.API
 }
 
-func newPssServiceAPI(svc *PssService) *PssServiceAPI {
-	return &PssServiceAPI{
+func newBzzServiceAPI(svc *BzzService) *BzzServiceAPI {
+	return &BzzServiceAPI{
 		service: svc,
 		api:     pss.NewAPI(svc.ps),
 	}
 }
 
-func (self *PssServiceAPI) AddPeer(pubKey hexutil.Bytes, addr pss.PssAddress) error {
+func (self *BzzServiceAPI) AddPeer(topic pss.Topic, pubKey hexutil.Bytes, addr pss.PssAddress) error {
+
+	psssvc, ok := self.service.pssService[topic]
+	if !ok {
+		return fmt.Errorf("pss protocol not registered")
+	}
 
 	// add the public key to the pss address book
-	err := self.api.SetPeerPublicKey(pubKey, *self.service.Topic, addr)
+	err := self.api.SetPeerPublicKey(pubKey, topic, addr)
 	if err != nil {
 		return err
 	}
@@ -186,7 +215,8 @@ func (self *PssServiceAPI) AddPeer(pubKey hexutil.Bytes, addr pss.PssAddress) er
 	// and start running it on the peer
 	var nid discover.NodeID
 	copy(nid[:], addr)
-	self.service.pssProtocol.AddPeer(p2p.NewPeer(nid, string(pubKey), []p2p.Cap{}), *self.service.Topic, true, common.ToHex(pubKey))
-	log.Info(fmt.Sprintf("adding peer %s to demoservice protocol", pubKey))
+	p2pp := p2p.NewPeer(nid, string(pubKey), []p2p.Cap{})
+	log.Info(fmt.Sprintf("adding peer %s to demoservice protocol %d, %p %s", pubKey, topic, p2pp, common.ToHex(pubKey)))
+	psssvc.protocol.AddPeer(p2pp, topic, true, common.ToHex(pubKey))
 	return nil
 }

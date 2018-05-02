@@ -76,7 +76,7 @@ func main() {
 
 	if err := stack.Register(func(ctx *node.ServiceContext) (node.Service, error) {
 
-		params := service.NewDemoServiceParams(func(data interface{}) {
+		params := service.NewDemoParams(func(data interface{}) {
 			r := data.(*protocol.Result)
 			log.Warn("node leaking result", "id", r.Id)
 		})
@@ -84,8 +84,7 @@ func main() {
 		params.MaxTimePerJob = defaultMaxTime
 		params.MaxDifficulty = defaultMaxDifficulty
 
-		svc := service.NewDemoService(params)
-		return svc, nil
+		return service.NewDemo(params)
 	}); err != nil {
 		log.Error(err.Error())
 		return

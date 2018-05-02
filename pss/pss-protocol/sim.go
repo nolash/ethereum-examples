@@ -141,9 +141,8 @@ func main() {
 
 	return
 }
-
 func newServices() adapters.Services {
-	params := service.NewDemoServiceParams(func(data interface{}) {
+	params := service.NewDemoParams(func(data interface{}) {
 		r := data.(*protocol.Result)
 		log.Warn("node leaking result", "id", r.Id)
 	})
@@ -154,7 +153,7 @@ func newServices() adapters.Services {
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
 			params.Id = node.Config.ID[:]
-			return service.NewDemoService(params), nil
+			return service.NewDemo(params)
 		},
 	}
 }

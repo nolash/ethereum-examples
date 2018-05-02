@@ -17,8 +17,8 @@ import (
 )
 
 // TODO: Change the id to sha1(peerid|data|submits.lastid), so moocher can find it in resource updates later
-// DemoService implements the node.Service interface
-type DemoService struct {
+// Demo implements the node.Service interface
+type Demo struct {
 
 	//
 	id []byte
@@ -35,13 +35,14 @@ type DemoService struct {
 	submits *submitStore
 	results *resultStore
 
-	// internal control stuff
-	mu     sync.RWMutex
-	ctx    context.Context
-	cancel func()
+	// internal stuff
+	protocol *p2p.Protocol
+	mu       sync.RWMutex
+	ctx      context.Context
+	cancel   func()
 }
 
-type DemoServiceParams struct {
+type DemoParams struct {
 	Id            []byte
 	MaxDifficulty uint8
 	MaxJobs       int
@@ -49,15 +50,15 @@ type DemoServiceParams struct {
 	ResultSink    ResultSinkFunc
 }
 
-func NewDemoServiceParams(sinkFunc ResultSinkFunc) *DemoServiceParams {
-	return &DemoServiceParams{
+func NewDemoParams(sinkFunc ResultSinkFunc) *DemoParams {
+	return &DemoParams{
 		ResultSink: sinkFunc,
 	}
 }
 
-func NewDemoService(params *DemoServiceParams) *DemoService {
+func NewDemo(params *DemoParams) (*Demo, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &DemoService{
+	d := &Demo{
 		id:            params.Id,
 		maxJobs:       params.MaxJobs,
 		maxDifficulty: params.MaxDifficulty,
@@ -68,50 +69,67 @@ func NewDemoService(params *DemoServiceParams) *DemoService {
 		ctx:           ctx,
 		cancel:        cancel,
 	}
+	if err := d.initProtocol(); err != nil {
+		return nil, err
+	}
+	return d, nil
 }
 
-func (self *DemoService) IsWorker() bool {
+func (self *Demo) IsWorker() bool {
 	return self.maxDifficulty > 0
 }
 
-func (self *DemoService) APIs() []rpc.API {
+func (self *Demo) APIs() []rpc.API {
 	return []rpc.API{
 		{
 			Namespace: "demo",
 			Version:   "1.0",
-			Service:   newDemoServiceAPI(self),
+			Service:   newDemoAPI(self),
 			Public:    true,
 		},
 	}
 }
 
-func (self *DemoService) Protocols() (protos []p2p.Protocol) {
+func (self *Demo) initProtocol() error {
 	proto, err := protocol.NewDemoProtocol(self.Run)
 	if err != nil {
-		log.Crit("can't create demo protocol")
+		return fmt.Errorf("cant't create demo protocol")
 	}
 	proto.SkillsHandler = self.skillsHandlerLocked
 	proto.StatusHandler = self.statusHandlerLocked
 	proto.RequestHandler = self.requestHandlerLocked
 	proto.ResultHandler = self.resultHandlerLocked
 	if err := proto.Init(); err != nil {
-		log.Crit("can't init demo protocol")
+		return fmt.Errorf("can't init demo protocol")
 	}
-	return []p2p.Protocol{proto.Protocol}
+	self.protocol = &proto.Protocol
+	return nil
 }
 
-func (self *DemoService) Start(srv *p2p.Server) error {
+func (self *Demo) Protocol() *p2p.Protocol {
+	return self.protocol
+}
+
+func (self *Demo) Spec() *protocols.Spec {
+	return protocol.Spec
+}
+
+func (self *Demo) Protocols() (protos []p2p.Protocol) {
+	return []p2p.Protocol{*self.protocol}
+}
+
+func (self *Demo) Start(srv *p2p.Server) error {
 	self.results.Start()
 	return nil
 }
 
-func (self *DemoService) Stop() error {
+func (self *Demo) Stop() error {
 	self.cancel()
 	return nil
 }
 
 // The protocol code provides Hook to run when protocol starts on a peer
-func (self *DemoService) Run(p *protocols.Peer) error {
+func (self *Demo) Run(p *protocols.Peer) error {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
 	log.Info("run protocol hook", "peer", p, "difficulty", self.maxDifficulty)
@@ -121,7 +139,7 @@ func (self *DemoService) Run(p *protocols.Peer) error {
 	return nil
 }
 
-func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
+func (self *Demo) getNextWorker(difficulty uint8) *protocols.Peer {
 	for p, d := range self.workers {
 		if d >= difficulty {
 			return p
@@ -130,7 +148,7 @@ func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
 	return nil
 }
 
-func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (protocol.ID, error) {
+func (self *Demo) SubmitRequest(data []byte, difficulty uint8) (protocol.ID, error) {
 	self.mu.Lock()
 	p := self.getNextWorker(difficulty)
 	if p == nil {
@@ -153,7 +171,7 @@ func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (protocol.
 	return id, nil
 }
 
-func (self *DemoService) skillsHandlerLocked(msg *protocol.Skills, p *protocols.Peer) error {
+func (self *Demo) skillsHandlerLocked(msg *protocol.Skills, p *protocols.Peer) error {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 	log.Trace("have skills type", "msg", msg, "peer", p)
@@ -161,7 +179,7 @@ func (self *DemoService) skillsHandlerLocked(msg *protocol.Skills, p *protocols.
 	return nil
 }
 
-func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.Peer) error {
+func (self *Demo) statusHandlerLocked(msg *protocol.Status, p *protocols.Peer) error {
 	log.Trace("have status type", "msg", msg, "peer", p)
 
 	self.mu.Lock()
@@ -192,7 +210,7 @@ func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.
 	return nil
 }
 
-func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocols.Peer) error {
+func (self *Demo) requestHandlerLocked(msg *protocol.Request, p *protocols.Peer) error {
 
 	self.mu.Lock()
 	defer self.mu.Unlock()
@@ -250,7 +268,7 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 	return nil
 }
 
-func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.Peer) error {
+func (self *Demo) resultHandlerLocked(msg *protocol.Result, p *protocols.Peer) error {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
 	if self.maxDifficulty > 0 {

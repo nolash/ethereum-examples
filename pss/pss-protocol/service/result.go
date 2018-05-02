@@ -21,6 +21,7 @@ type resultEntry struct {
 	expires time.Time
 }
 
+// TODO: revert to normal map instead of sync.Map
 type resultStore struct {
 	// handle results
 	entries      []*resultEntry // hashing nodes store the results here, while awaiting ack of reception by requester
@@ -35,9 +36,6 @@ type resultStore struct {
 }
 
 func newResultStore(ctx context.Context, sinkFunc ResultSinkFunc) *resultStore {
-	if sinkFunc == nil {
-		panic("yikes, resultsStore.sinkFunc is nil")
-	}
 	return &resultStore{
 		entries: make([]*resultEntry, defaultResultsCapacity),
 		//idx:          make(map[protocol.ID]int),
@@ -135,7 +133,9 @@ func (self *resultStore) prune() {
 		e := self.entries[n.(int)]
 		if e.expires.Before(time.Now()) {
 			self.del(prid)
-			self.sinkFunc(e.Result)
+			if self.sinkFunc != nil {
+				self.sinkFunc(e.Result)
+			}
 		}
 		self.mu.Unlock()
 		return true

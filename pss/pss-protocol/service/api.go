@@ -4,21 +4,21 @@ import (
 	"../protocol"
 )
 
-type DemoServiceAPI struct {
-	service *DemoService
+type DemoAPI struct {
+	service *Demo
 }
 
-func newDemoServiceAPI(s *DemoService) *DemoServiceAPI {
-	return &DemoServiceAPI{
+func newDemoAPI(s *Demo) *DemoAPI {
+	return &DemoAPI{
 		service: s,
 	}
 }
 
-func (self *DemoServiceAPI) Submit(data []byte, difficulty uint8) (protocol.ID, error) {
+func (self *DemoAPI) Submit(data []byte, difficulty uint8) (protocol.ID, error) {
 	return self.service.SubmitRequest(data, difficulty)
 }
 
-func (self *DemoServiceAPI) SetDifficulty(d uint8) error {
+func (self *DemoAPI) SetDifficulty(d uint8) error {
 	self.service.mu.Lock()
 	defer self.service.mu.Unlock()
 	self.service.maxDifficulty = d

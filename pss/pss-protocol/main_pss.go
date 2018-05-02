@@ -77,14 +77,18 @@ func main() {
 
 	// create the demo service, but now we don't register it directly
 	// so we avoid the protocol running on the direct connected peers
-	params := service.NewDemoServiceParams(func(data interface{}) {
+	params := service.NewDemoParams(func(data interface{}) {
 		r := data.(*protocol.Result)
 		log.Warn("node leaking result", "id", r.Id)
 	})
 	params.MaxJobs = defaultMaxJobs
 	params.MaxTimePerJob = defaultMaxTime
 	params.MaxDifficulty = defaultMaxDifficulty
-	svc := service.NewDemoService(params)
+	svc, err := service.NewDemo(params)
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
 
 	// create the pss service that wraps the demo protocol
 	privkey, err := crypto.GenerateKey()
@@ -92,6 +96,7 @@ func main() {
 		log.Error(err.Error())
 		return
 	}
+
 	bzzCfg := swarmapi.NewConfig()
 	bzzCfg.SyncEnabled = false
 	bzzCfg.Port = *bzzport
@@ -99,7 +104,12 @@ func main() {
 	bzzCfg.HiveParams.Discovery = true
 	bzzCfg.Init(privkey)
 
-	bzzSvc, err := bzz.NewPssService(bzzCfg, svc)
+	bzzSvc, err := bzz.NewBzzService(bzzCfg)
+	if err != nil {
+		log.Error(err.Error())
+		return
+	}
+	err = bzzSvc.RegisterPssProtocol(svc)
 	if err != nil {
 		log.Error(err.Error())
 		return

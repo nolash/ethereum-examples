@@ -186,7 +186,6 @@ func main() {
 	if step.Error != nil {
 		log.Error(step.Error.Error())
 	}
-	log.Error("out")
 	return
 }
 
@@ -194,7 +193,7 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 	var pivotBaseAddr string
 	var pivotPubKeyHex string
 	var pivotClient *rpc.Client
-	topic := pss.BytesToTopic([]byte(protocol.Spec.Name))
+	topic := pss.BytesToTopic([]byte(fmt.Sprintf("%s:%d", protocol.Spec.Name, protocol.Spec.Version)))
 	for i, nid := range nids {
 		client, err := n.GetNode(nid).Client()
 		if err != nil {
@@ -221,7 +220,7 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 			if err != nil {
 				return err
 			}
-			err = client.Call(nil, "demops_addPeer", pivotPubKeyHex, pivotBaseAddr)
+			err = client.Call(nil, "pss_addPeer", topic, pivotPubKeyHex, pivotBaseAddr)
 			if err != nil {
 				return err
 			}
@@ -231,7 +230,7 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 }
 
 func newServices() adapters.Services {
-	params := service.NewDemoServiceParams(func(data interface{}) {
+	params := service.NewDemoParams(func(data interface{}) {
 		r := data.(*protocol.Result)
 		log.Warn("leak", "id", r.Id, "hash", fmt.Sprintf("%x", r.Hash))
 	})
@@ -247,7 +246,10 @@ func newServices() adapters.Services {
 		},
 		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
 			// create the pss service that wraps the demo protocol
-			svc := service.NewDemoService(params)
+			svc, err := service.NewDemo(params)
+			if err != nil {
+				return nil, err
+			}
 			bzzCfg := swarmapi.NewConfig()
 			bzzCfg.SyncEnabled = false
 			//bzzCfg.Port = *bzzport
@@ -255,10 +257,11 @@ func newServices() adapters.Services {
 			bzzCfg.HiveParams.Discovery = true
 			bzzCfg.Init(privateKeys[node.Config.ID])
 
-			bzzSvc, err := bzz.NewPssService(bzzCfg, svc)
+			bzzSvc, err := bzz.NewBzzService(bzzCfg)
 			if err != nil {
 				return nil, err
 			}
+			bzzSvc.RegisterPssProtocol(svc)
 			return bzzSvc, nil
 		},
 	}

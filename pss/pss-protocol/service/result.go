@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -17,14 +19,14 @@ type ResultSinkFunc func(data interface{})
 
 type resultEntry struct {
 	*protocol.Result
-	cid     *string
+	prid    protocol.ID // was result.ID?
 	expires time.Time
 }
 
 type resultStore struct {
 	// handle results
 	entries      []*resultEntry // hashing nodes store the results here, while awaiting ack of reception by requester
-	idx          map[string]int // index to look up resultentry by
+	idx          sync.Map       // index to look up resultentry by
 	counter      int            // amount of results stored in resultsCounter
 	capacity     int            // amount of results possible to store
 	releaseDelay time.Duration  // time before a result expires and should be passed to sinkFunc
@@ -39,8 +41,8 @@ func newResultStore(ctx context.Context, sinkFunc ResultSinkFunc) *resultStore {
 		panic("yikes, resultsStore.sinkFunc is nil")
 	}
 	return &resultStore{
-		entries:      make([]*resultEntry, defaultResultsCapacity),
-		idx:          make(map[string]int),
+		entries: make([]*resultEntry, defaultResultsCapacity),
+		//idx:          make(map[protocol.ID]int),
 		releaseDelay: defaultResultsReleaseDelay,
 		capacity:     defaultResultsCapacity,
 		sinkFunc:     sinkFunc,
@@ -48,7 +50,7 @@ func newResultStore(ctx context.Context, sinkFunc ResultSinkFunc) *resultStore {
 	}
 }
 
-func (self *resultStore) Put(id string, res *protocol.Result) bool {
+func (self *resultStore) Put(id protocol.ID, res *protocol.Result) bool {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 	if self.full() {
@@ -56,33 +58,40 @@ func (self *resultStore) Put(id string, res *protocol.Result) bool {
 	}
 	self.entries[self.counter] = &resultEntry{
 		Result:  res,
-		cid:     &id,
+		prid:    id,
 		expires: time.Now().Add(self.releaseDelay),
 	}
-	self.idx[id] = self.counter
+	self.idx.Store(id, self.counter)
+	//self.idx[id] = self.counter
+	fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>> adding %x idx %d\n", id, self.counter)
 	self.counter++
 	return true
 }
 
-func (self *resultStore) Get(id string) *protocol.Result {
+func (self *resultStore) Get(id protocol.ID) *protocol.Result {
 	self.mu.RLock()
 	defer self.mu.RUnlock()
-	return self.entries[self.idx[id]].Result
+	n, ok := self.idx.Load(id)
+	if !ok {
+		return nil
+	}
+	return self.entries[n.(int)].Result
 }
 
-func (self *resultStore) Del(id string) {
+func (self *resultStore) Del(id protocol.ID) {
 	self.mu.Lock()
 	defer self.mu.Unlock()
 	self.del(id)
 }
 
-func (self *resultStore) del(id string) {
-	if i, ok := self.idx[id]; ok {
-		self.entries[i] = self.entries[self.counter-1]
-		delete(self.idx, id)
+func (self *resultStore) del(id protocol.ID) {
+	if n, ok := self.idx.Load(id); ok {
+		fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>>> removing %x idx %d\n", id, n.(int))
+		self.entries[n.(int)] = self.entries[self.counter-1]
+		self.idx.Delete(id)
 		self.counter--
 		if self.counter >= 0 {
-			self.idx[*self.entries[i].cid] = i
+			self.idx.Store(self.entries[n.(int)].prid, n.(int))
 		}
 	}
 }
@@ -120,19 +129,25 @@ func (self *resultStore) Start() {
 
 // TODO: this procedure needs priority control, so it doesn't block for too long
 func (self *resultStore) prune() {
-	var keys []string
 	self.mu.Lock()
-	for k := range self.idx {
-		keys = append(keys, k)
-	}
+	var prids []protocol.ID
+	//for k, n := range self.idx {
+	self.idx.Range(func(k interface{}, n interface{}) bool {
+		prids = append(prids, k.(protocol.ID))
+		fmt.Fprintf(os.Stderr, ">>>>>>>>>>>>>>>>>>>>>>>> have key %08x idx %d\n", k.(protocol.ID), n.(int))
+		return true
+	})
+	//}
 	self.mu.Unlock()
-	for _, k := range keys {
+	for _, prid := range prids {
 		self.mu.Lock()
-		e := self.entries[self.idx[k]]
+		n, _ := self.idx.Load(prid)
+		e := self.entries[n.(int)]
 		if e.expires.Before(time.Now()) {
-			self.del(*e.cid)
+			self.del(prid)
 			self.sinkFunc(e.Result)
 		}
 		self.mu.Unlock()
 	}
+	fmt.Fprintf(os.Stderr, ">>>>>>> prune done\n")
 }

@@ -28,6 +28,8 @@ const (
 	protoMax     = 2048
 )
 
+type ID [8]byte
+
 // Skills is a protocol message type
 //
 // It is an asynchronous handshake message, signaling the state the node is in.
@@ -48,7 +50,7 @@ type Skills struct {
 //
 // A node also uses Status to signal successful reception of a Result message
 type Status struct {
-	Id   uint64
+	Id   ID
 	Code uint8
 }
 
@@ -56,7 +58,7 @@ type Status struct {
 //
 // It is used by nodes to request a hashing job
 type Request struct {
-	Id         uint64
+	Id         ID
 	Data       []byte
 	Difficulty uint8
 }
@@ -65,7 +67,7 @@ type Request struct {
 //
 // It is used by nodes to transmit the results of a hashing job
 type Result struct {
-	Id    uint64
+	Id    ID
 	Nonce []byte
 	Hash  []byte
 }

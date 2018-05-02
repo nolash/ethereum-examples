@@ -1,5 +1,9 @@
 package service
 
+import (
+	"../protocol"
+)
+
 type DemoServiceAPI struct {
 	service *DemoService
 }
@@ -10,7 +14,7 @@ func newDemoServiceAPI(s *DemoService) *DemoServiceAPI {
 	}
 }
 
-func (self *DemoServiceAPI) Submit(data []byte, difficulty uint8) (uint64, error) {
+func (self *DemoServiceAPI) Submit(data []byte, difficulty uint8) (protocol.ID, error) {
 	return self.service.SubmitRequest(data, difficulty)
 }
 

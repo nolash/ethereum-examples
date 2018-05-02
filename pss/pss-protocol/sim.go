@@ -12,7 +12,7 @@ import (
 	"github.com/ethereum/go-ethereum/p2p/simulations"
 	"github.com/ethereum/go-ethereum/p2p/simulations/adapters"
 
-	colorable "github.com/mattn/go-colorable"
+	//colorable "github.com/mattn/go-colorable"
 
 	"./protocol"
 	"./service"
@@ -34,7 +34,7 @@ var (
 
 func init() {
 	log.PrintOrigins(true)
-	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	//log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
 
 	maxDifficulty = defaultMaxDifficulty
 	minDifficulty = defaultMinDifficulty
@@ -93,7 +93,7 @@ func main() {
 		if i == 0 {
 			continue
 		}
-		go func() {
+		go func(nid discover.NodeID) {
 			var count int
 			client, err := n.GetNode(nid).Client()
 			if err != nil {
@@ -126,7 +126,7 @@ func main() {
 				rand.Read(data)
 				difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
 
-				var id uint64
+				var id protocol.ID
 				err := client.Call(&id, "demo_submit", data, difficulty)
 				if err != nil {
 					log.Warn("job not accepted", "err", err)
@@ -134,7 +134,7 @@ func main() {
 					log.Info("job submitted", "id", id)
 				}
 			}
-		}()
+		}(nid)
 	}
 
 	http.ListenAndServe(":8888", simulations.NewServer(n))

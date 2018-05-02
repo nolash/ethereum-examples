@@ -10,7 +10,6 @@ import (
 
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/p2p"
-	"github.com/ethereum/go-ethereum/p2p/discover"
 	"github.com/ethereum/go-ethereum/p2p/protocols"
 	"github.com/ethereum/go-ethereum/rpc"
 
@@ -126,15 +125,15 @@ func (self *DemoService) getNextWorker(difficulty uint8) *protocols.Peer {
 	return nil
 }
 
-func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (uint64, error) {
+func (self *DemoService) SubmitRequest(data []byte, difficulty uint8) (protocol.ID, error) {
 	self.mu.Lock()
 	p := self.getNextWorker(difficulty)
 	if p == nil {
-		return 0, fmt.Errorf("Couldn't find any workers for difficulty %d", difficulty)
+		return protocol.ID{}, fmt.Errorf("Couldn't find any workers for difficulty %d", difficulty)
 	}
-	id := self.submits.IncId()
+	id := newID(data, self.submits.IncSerial())
 	self.mu.Unlock()
-	go func(id uint64) {
+	go func(id protocol.ID) {
 		req := &protocol.Request{
 			Id:         id,
 			Data:       data,
@@ -166,7 +165,7 @@ func (self *DemoService) statusHandlerLocked(msg *protocol.Status, p *protocols.
 	switch msg.Code {
 	case protocol.StatusThanksABunch:
 		if self.IsWorker() {
-			self.results.Del(newCacheId(p.ID(), msg.Id))
+			self.results.Del(msg.Id)
 		}
 	case protocol.StatusBusy:
 		if self.IsWorker() {
@@ -233,8 +232,7 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 			Hash:  j.Hash,
 		}
 
-		cid := newCacheId(p.ID(), res.Id)
-		self.results.Put(cid, res)
+		self.results.Put(msg.Id, res)
 		self.mu.Lock()
 		self.currentJobs--
 		self.mu.Unlock()
@@ -242,7 +240,7 @@ func (self *DemoService) requestHandlerLocked(msg *protocol.Request, p *protocol
 		p.Send(res)
 
 		log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
-	}(msg) // do we need to pass self.mu here?
+	}(msg)
 
 	return nil
 }
@@ -270,12 +268,12 @@ func (self *DemoService) resultHandlerLocked(msg *protocol.Result, p *protocols.
 	return nil
 }
 
-func newCacheId(pid discover.NodeID, id uint64) string {
+func newID(data []byte, nonce uint64) (id protocol.ID) {
 	c := make([]byte, 8)
-	binary.LittleEndian.PutUint64(c, id)
+	binary.LittleEndian.PutUint64(c, nonce)
 	h := sha1.New()
-	h.Write(pid[:])
-	h.Write(c)
-	return fmt.Sprintf("%x", h.Sum(nil))
-
+	h.Write(data)
+	h.Sum(c)
+	copy(id[:], h.Sum(nil)[:8])
+	return id
 }

@@ -152,7 +152,7 @@ func main() {
 					rand.Read(data)
 					difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
 
-					var id uint64
+					var id protocol.ID
 					err := client.Call(&id, "demo_submit", data, difficulty)
 					if err != nil {
 						log.Warn("job not accepted", "err", err)

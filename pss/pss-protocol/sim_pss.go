@@ -30,6 +30,7 @@ const (
 	defaultMinDifficulty = 8
 	defaultMaxTime       = time.Second * 10
 	defaultMaxJobs       = 100
+	defaultBzzApiHost    = "http://localhost:8500"
 )
 
 var (
@@ -230,21 +231,14 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 }
 
 func newServices() adapters.Services {
-	params := service.NewDemoParams(func(data interface{}) {
-		r := data.(*protocol.Result)
-		log.Warn("leak", "id", r.Id, "hash", fmt.Sprintf("%x", r.Hash))
-	})
-	params.MaxJobs = maxJobs
-	params.MaxTimePerJob = maxTime
-	params.MaxDifficulty = maxDifficulty
-
 	return adapters.Services{
-		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
-			//	svc := service.NewDemoService(params)
-			// return svc, nil
-			return nil, nil
-		},
 		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
+			bzzapi := bzz.NewClient(defaultBzzApiHost, fmt.Sprintf("%x.mutable.test", node.Config.ID[:]))
+			params := service.NewDemoParams(resourceSink(bzzapi))
+			params.MaxJobs = maxJobs
+			params.MaxTimePerJob = maxTime
+			params.MaxDifficulty = maxDifficulty
+
 			// create the pss service that wraps the demo protocol
 			svc, err := service.NewDemo(params)
 			if err != nil {
@@ -264,5 +258,16 @@ func newServices() adapters.Services {
 			bzzSvc.RegisterPssProtocol(svc)
 			return bzzSvc, nil
 		},
+	}
+}
+
+func resourceSink(bzzapi *bzz.Client) func(interface{}) {
+	return func(obj interface{}) {
+		if res, ok := obj.(*protocol.Result); ok {
+			log.Warn("posting", "obj", res)
+			if err := bzzapi.UpdateResource(res.Hash); err != nil {
+				log.Error("reosurce fail", "err", err, "hash", res.Hash)
+			}
+		}
 	}
 }

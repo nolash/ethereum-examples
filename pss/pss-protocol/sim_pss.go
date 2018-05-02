@@ -22,15 +22,16 @@ import (
 
 	"./bzz"
 	"./protocol"
+	"./resource"
 	"./service"
 )
 
 const (
-	defaultMaxDifficulty = 24
-	defaultMinDifficulty = 8
-	defaultMaxTime       = time.Second * 10
-	defaultMaxJobs       = 100
-	defaultBzzApiHost    = "http://localhost:8500"
+	defaultMaxDifficulty   = 24
+	defaultMinDifficulty   = 8
+	defaultMaxTime         = time.Second * 10
+	defaultMaxJobs         = 100
+	defaultResourceApiHost = "http://localhost:8500"
 )
 
 var (
@@ -233,8 +234,8 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 func newServices() adapters.Services {
 	return adapters.Services{
 		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
-			bzzapi := bzz.NewClient(defaultBzzApiHost, fmt.Sprintf("%x.mutable.test", node.Config.ID[:]))
-			params := service.NewDemoParams(resourceSink(bzzapi))
+			resourceapi := resource.NewClient(defaultResourceApiHost, fmt.Sprintf("%x.mutable.test", node.Config.ID[:]))
+			params := service.NewDemoParams(resourceapi.ResourceSinkFunc())
 			params.MaxJobs = maxJobs
 			params.MaxTimePerJob = maxTime
 			params.MaxDifficulty = maxDifficulty
@@ -258,16 +259,5 @@ func newServices() adapters.Services {
 			bzzSvc.RegisterPssProtocol(svc)
 			return bzzSvc, nil
 		},
-	}
-}
-
-func resourceSink(bzzapi *bzz.Client) func(interface{}) {
-	return func(obj interface{}) {
-		if res, ok := obj.(*protocol.Result); ok {
-			log.Warn("posting", "obj", res)
-			if err := bzzapi.UpdateResource(res.Hash); err != nil {
-				log.Error("reosurce fail", "err", err, "hash", res.Hash)
-			}
-		}
 	}
 }

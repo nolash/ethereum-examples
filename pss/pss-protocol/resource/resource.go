@@ -1,4 +1,4 @@
-package bzz
+package resource
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"net/http"
 
 	"github.com/ethereum/go-ethereum/log"
+
+	"../protocol"
 )
 
 type Client struct {
@@ -22,7 +24,6 @@ func NewClient(bzzapi string, resource string) *Client {
 		url:      bzzapi,
 	}
 }
-
 func (b *Client) createResource(data []byte) error {
 	_, err := b.client.Post(
 		fmt.Sprintf("%s/bzz-resource:/%s/raw/2", b.url, b.resource),
@@ -36,7 +37,7 @@ func (b *Client) createResource(data []byte) error {
 	return err
 }
 
-func (b *Client) UpdateResource(data []byte) error {
+func (b *Client) updateResource(data []byte) error {
 	if !b.ready {
 		return b.createResource(data)
 	}
@@ -47,4 +48,18 @@ func (b *Client) UpdateResource(data []byte) error {
 		bytes.NewBuffer(data),
 	)
 	return err
+}
+
+func (b *Client) ResourceSinkFunc() func(interface{}) {
+	return func(obj interface{}) {
+		if res, ok := obj.(*protocol.Result); ok {
+			log.Warn("posting", "obj", res)
+			if err := b.updateResource(res.Hash); err != nil {
+				log.Error("reosurce fail", "err", err, "hash", res.Hash)
+			}
+		}
+	}
+}
+func main() {
+	fmt.Println("vim-go")
 }

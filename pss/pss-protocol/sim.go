@@ -141,11 +141,9 @@ func main() {
 
 	return
 }
+
 func newServices() adapters.Services {
-	params := service.NewDemoParams(func(data interface{}) {
-		r := data.(*protocol.Result)
-		log.Warn("node leaking result", "id", r.Id)
-	})
+	params := service.NewDemoParams(nil)
 	params.MaxJobs = maxJobs
 	params.MaxTimePerJob = maxTime
 	params.MaxDifficulty = maxDifficulty

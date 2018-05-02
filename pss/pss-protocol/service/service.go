@@ -20,7 +20,7 @@ import (
 // Demo implements the node.Service interface
 type Demo struct {
 
-	//
+	// a unique identifier used to track a request across messages
 	id []byte
 
 	// worker mode params

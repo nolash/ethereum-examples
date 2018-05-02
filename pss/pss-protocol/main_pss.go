@@ -17,7 +17,6 @@ import (
 	swarmapi "github.com/ethereum/go-ethereum/swarm/api"
 
 	"./bzz"
-	"./protocol"
 	"./service"
 )
 
@@ -77,10 +76,7 @@ func main() {
 
 	// create the demo service, but now we don't register it directly
 	// so we avoid the protocol running on the direct connected peers
-	params := service.NewDemoParams(func(data interface{}) {
-		r := data.(*protocol.Result)
-		log.Warn("node leaking result", "id", r.Id)
-	})
+	params := service.NewDemoParams(nil)
 	params.MaxJobs = defaultMaxJobs
 	params.MaxTimePerJob = defaultMaxTime
 	params.MaxDifficulty = defaultMaxDifficulty

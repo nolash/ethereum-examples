@@ -11,8 +11,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/swarm/storage"
-
-	colorable "github.com/mattn/go-colorable"
+	//colorable "github.com/mattn/go-colorable"
 )
 
 var (
@@ -30,8 +29,8 @@ func init() {
 		*dir = fmt.Sprintf("%s/.ethereum", home)
 	}
 
-	log.PrintOrigins(true)
-	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	//log.PrintOrigins(true)
+	//log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
 }
 
 func main() {
@@ -107,7 +106,28 @@ OUTER:
 		log.Error(err.Error())
 		return
 	}
+	output(rh, name)
+	for {
+		rsrc, err = rh.LookupPreviousByName(ctx, name, &storage.ResourceLookupParams{})
+		if err != nil {
+			log.Warn(err.Error())
+			break
+		}
+		output(rh, name)
+	}
 	_ = rsrc
+}
+
+func output(rh *storage.ResourceHandler, name string) {
+	period, _ := rh.GetLastPeriod(name)
+	version, _ := rh.GetVersion(name)
+	key, content, _ := rh.GetContent(name)
+	fmt.Printf("v%d.%d [%08x]: ", period, version, key)
+	if len(content) < 32 {
+		fmt.Printf("%s\n", content)
+	} else {
+		fmt.Printf("%s ...\n", content[:32])
+	}
 }
 
 // implements storage.ResourceSigner

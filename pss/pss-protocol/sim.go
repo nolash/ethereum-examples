@@ -2,8 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/log"
@@ -15,14 +19,16 @@ import (
 	colorable "github.com/mattn/go-colorable"
 
 	"./protocol"
+	"./resource"
 	"./service"
 )
 
 const (
-	defaultMaxDifficulty = 24
-	defaultMinDifficulty = 8
-	defaultMaxTime       = time.Second * 10
-	defaultMaxJobs       = 100
+	defaultMaxDifficulty   = 24
+	defaultMinDifficulty   = 8
+	defaultMaxTime         = time.Second * 10
+	defaultMaxJobs         = 100
+	defaultResourceApiHost = "http://localhost:8500"
 )
 
 var (
@@ -34,7 +40,7 @@ var (
 
 func init() {
 	log.PrintOrigins(true)
-	log.Root().SetHandler(log.LvlFilterHandler(log.LvlTrace, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	log.Root().SetHandler(log.LvlFilterHandler(log.LvlDebug, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
 
 	maxDifficulty = defaultMaxDifficulty
 	minDifficulty = defaultMinDifficulty
@@ -68,6 +74,8 @@ func main() {
 		nids = append(nids, nod.ID())
 	}
 
+	go http.ListenAndServe(":8888", simulations.NewServer(n))
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	if err := simulations.Up(ctx, n, nids, simulations.UpModeStar); err != nil {
@@ -76,6 +84,7 @@ func main() {
 	}
 
 	quitC := make(chan struct{})
+	trigger := make(chan discover.NodeID)
 	events := make(chan *simulations.Event)
 	sub := n.Events().Subscribe(events)
 	// event sink on quit
@@ -89,67 +98,111 @@ func main() {
 		return
 	}()
 
+	action := func(ctx context.Context) error {
+		for i, nid := range nids {
+			if i == 0 {
+				log.Info("appointed worker node", "node", nid.String())
+				go func(nid discover.NodeID) {
+					trigger <- nid
+				}(nid)
+				continue
+			}
+			client, err := n.GetNode(nid).Client()
+			if err != nil {
+				return err
+			}
+			err = client.Call(nil, "demo_setDifficulty", 0)
+			if err != nil {
+				return err
+			}
+
+			go func(nid discover.NodeID) {
+				sendlimit := 20
+				tick := time.NewTicker(time.Millisecond * 100)
+				defer tick.Stop()
+				c := 0
+				for {
+					select {
+					case <-events:
+						continue
+					case <-quitC:
+						return
+					case <-ctx.Done():
+						return
+					case <-tick.C:
+					}
+					if sendlimit < c {
+						log.Debug("stop sending", "node", nid)
+						trigger <- nid
+						tick.Stop()
+						continue
+					}
+					c++
+					data := make([]byte, 64)
+					rand.Read(data)
+					difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
+
+					var id protocol.ID
+					err := client.Call(&id, "demo_submit", data, difficulty)
+					if err != nil {
+						log.Warn("job not accepted", "err", err)
+					} else {
+						log.Info("job submitted", "id", id)
+					}
+				}
+			}(nid)
+		}
+		return nil
+	}
+	check := func(ctx context.Context, nid discover.NodeID) (bool, error) {
+		select {
+		case <-ctx.Done():
+		default:
+		}
+		log.Warn("ok", "nid", nid)
+		return true, nil
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	sim := simulations.NewSimulation(n)
+	step := sim.Run(ctx, &simulations.Step{
+		Action:  action,
+		Trigger: trigger,
+		Expect: &simulations.Expectation{
+			Nodes: nids,
+			Check: check,
+		},
+	})
+	if step.Error != nil {
+		log.Error(step.Error.Error())
+	}
 	for i, nid := range nids {
 		if i == 0 {
 			continue
 		}
-		go func(nid discover.NodeID) {
-			var count int
-			client, err := n.GetNode(nid).Client()
-			if err != nil {
-				return
-			}
-			err = client.Call(nil, "demo_setDifficulty", 0)
-			if err != nil {
-				return
-			}
-			tick := time.NewTicker(time.Millisecond * 100)
-			for {
-				select {
-				case e := <-events:
-					if e.Type == simulations.EventTypeMsg {
-						log.Info("got message", "e", e)
-						continue
-					}
+		log.Debug("stopping node", "nid", nid)
+		n.Stop(nid)
 
-				case <-quitC:
-					return
-				case <-tick.C:
-					if count > 5 {
-						n.Stop(nid)
-						tick.Stop()
-						return
-					}
-					count++
-				}
-				data := make([]byte, 64)
-				rand.Read(data)
-				difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
-
-				var id protocol.ID
-				err := client.Call(&id, "demo_submit", data, difficulty)
-				if err != nil {
-					log.Warn("job not accepted", "err", err)
-				} else {
-					log.Info("job submitted", "id", id)
-				}
-			}
-		}(nid)
 	}
+	close(quitC)
+	sigC := make(chan os.Signal)
+	signal.Notify(sigC, syscall.SIGINT)
 
-	http.ListenAndServe(":8888", simulations.NewServer(n))
+	<-sigC
 
 	return
 }
 
 func newServices() adapters.Services {
-	params := service.NewDemoParams(nil)
-	params.MaxJobs = maxJobs
-	params.MaxTimePerJob = maxTime
-	params.MaxDifficulty = maxDifficulty
-
 	return adapters.Services{
 		"demo": func(node *adapters.ServiceContext) (node.Service, error) {
+			resourceapi := resource.NewClient(defaultResourceApiHost, fmt.Sprintf("%x.mutable.test", node.Config.ID[:]))
+			params := service.NewDemoParams(resourceapi.ResourceSinkFunc())
+			params.MaxJobs = maxJobs
+			params.MaxTimePerJob = maxTime
+			params.MaxDifficulty = maxDifficulty
+
 			params.Id = node.Config.ID[:]
 			return service.NewDemo(params)
 		},

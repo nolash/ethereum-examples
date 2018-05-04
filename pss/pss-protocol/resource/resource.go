@@ -31,7 +31,7 @@ func (b *Client) createResource(data []byte) error {
 		bytes.NewBuffer(data),
 	)
 	if err == nil {
-		log.Error("setting ready")
+		log.Debug("creating resource", "id", b.resource)
 		b.ready = true
 	}
 	return err
@@ -41,7 +41,6 @@ func (b *Client) updateResource(data []byte) error {
 	if !b.ready {
 		return b.createResource(data)
 	}
-	log.Error("is ready")
 	_, err := b.client.Post(
 		fmt.Sprintf("%s/bzz-resource:/%s/raw", b.url, b.resource),
 		"content-type: application/octet-stream",
@@ -53,9 +52,9 @@ func (b *Client) updateResource(data []byte) error {
 func (b *Client) ResourceSinkFunc() func(interface{}) {
 	return func(obj interface{}) {
 		if res, ok := obj.(*protocol.Result); ok {
-			log.Warn("posting", "obj", res)
+			log.Debug("posting", "obj", fmt.Sprintf("%x", res.Hash))
 			if err := b.updateResource(res.Hash); err != nil {
-				log.Error("reosurce fail", "err", err, "hash", res.Hash)
+				log.Error("resource fail", "err", err, "hash", res.Hash)
 			}
 		}
 	}

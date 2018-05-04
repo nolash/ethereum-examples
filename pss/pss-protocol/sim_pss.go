@@ -5,6 +5,10 @@ import (
 	"crypto/ecdsa"
 	"fmt"
 	"math/rand"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -29,7 +33,7 @@ import (
 const (
 	defaultMaxDifficulty   = 24
 	defaultMinDifficulty   = 8
-	defaultMaxTime         = time.Second * 10
+	defaultMaxTime         = time.Second * 15
 	defaultMaxJobs         = 100
 	defaultResourceApiHost = "http://localhost:8500"
 )
@@ -69,7 +73,7 @@ func main() {
 	defer n.Shutdown()
 
 	var nids []discover.NodeID
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		c := adapters.RandomNodeConfig()
 		nod, err := n.NewNodeWithConfig(c)
 		if err != nil {
@@ -83,6 +87,8 @@ func main() {
 			return
 		}
 	}
+
+	go http.ListenAndServe(":8888", simulations.NewServer(n))
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
@@ -118,9 +124,10 @@ func main() {
 	action := func(ctx context.Context) error {
 		for i, nid := range nids {
 			if i == 0 {
-				go func() {
+				log.Info("appointed worker node", "node", nid.String())
+				go func(nid discover.NodeID) {
 					trigger <- nid
-				}()
+				}(nid)
 				continue
 			}
 			client, err := n.GetNode(nid).Client()
@@ -134,22 +141,30 @@ func main() {
 			}
 
 			go func(nid discover.NodeID) {
-				tick := time.NewTicker(time.Millisecond * 500)
+				sendlimit := 20
+				tick := time.NewTicker(time.Millisecond * 100)
+				defer tick.Stop()
+				c := 0
 				for {
 					select {
-					case e := <-events:
-						if e.Type == simulations.EventTypeMsg {
-							continue
-						}
+					case <-events:
+						continue
 
 					case <-quitC:
-						trigger <- nid
+						//trigger <- nid
 						return
 					case <-ctx.Done():
-						trigger <- nid
+						//trigger <- nid
 						return
 					case <-tick.C:
 					}
+					if sendlimit < c {
+						log.Debug("stop sending", "node", nid)
+						trigger <- nid
+						tick.Stop()
+						continue
+					}
+					c++
 					data := make([]byte, 64)
 					rand.Read(data)
 					difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
@@ -159,7 +174,7 @@ func main() {
 					if err != nil {
 						log.Warn("job not accepted", "err", err)
 					} else {
-						log.Info("job submitted", "id", id, "nid", nid)
+						log.Debug("job submitted", "id", id, "nid", nid)
 					}
 				}
 			}(nid)
@@ -171,15 +186,16 @@ func main() {
 		case <-ctx.Done():
 		default:
 		}
+		log.Warn("ok", "nid", nid)
 		return true, nil
 	}
 
-	ctx, cancel = context.WithTimeout(context.Background(), time.Second*60)
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	sim := simulations.NewSimulation(n)
 	step := sim.Run(ctx, &simulations.Step{
 		Action:  action,
-		Trigger: nil,
+		Trigger: trigger,
 		Expect: &simulations.Expectation{
 			Nodes: nids,
 			Check: check,
@@ -188,6 +204,20 @@ func main() {
 	if step.Error != nil {
 		log.Error(step.Error.Error())
 	}
+	for i, nid := range nids {
+		if i == 0 {
+			continue
+		}
+		log.Debug("stopping node", "nid", nid)
+		n.Stop(nid)
+
+	}
+	close(quitC)
+	sigC := make(chan os.Signal)
+	signal.Notify(sigC, syscall.SIGINT)
+
+	<-sigC
+
 	return
 }
 

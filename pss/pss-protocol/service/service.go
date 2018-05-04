@@ -188,23 +188,24 @@ func (self *Demo) statusHandlerLocked(msg *protocol.Status, p *protocols.Peer) e
 	switch msg.Code {
 	case protocol.StatusThanksABunch:
 		if self.IsWorker() {
+			log.Debug("got thanks, how polite!", "msg", msg.Id)
 			self.results.Del(msg.Id)
 		}
 	case protocol.StatusBusy:
 		if self.IsWorker() {
 			return nil
 		}
-		log.Trace("peer is busy. please implement throttling")
+		log.Debug("peer is busy. please implement throttling")
 	case protocol.StatusTooHard:
 		if self.IsWorker() {
 			return nil
 		}
-		log.Trace("we sent wrong difficulty or it changed. please implement adjusting it")
+		log.Debug("we sent wrong difficulty or it changed. please implement adjusting it")
 	case protocol.StatusGaveup:
 		if self.IsWorker() {
 			return nil
 		}
-		log.Trace("peer gave up on the job. please implement how to select someone else for the job")
+		log.Debug("peer gave up on the job. please implement how to select someone else for the job")
 	}
 
 	return nil
@@ -260,7 +261,7 @@ func (self *Demo) requestHandlerLocked(msg *protocol.Request, p *protocols.Peer)
 		self.currentJobs--
 		self.mu.Unlock()
 
-		p.Send(res)
+		go p.Send(res)
 
 		log.Debug("finished job", "id", msg.Id, "nonce", j.Nonce, "hash", j.Hash)
 	}(msg)

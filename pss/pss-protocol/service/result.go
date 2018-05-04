@@ -10,7 +10,7 @@ import (
 
 const (
 	defaultResultsCapacity     = 1000
-	defaultResultsReleaseDelay = time.Second
+	defaultResultsReleaseDelay = time.Second * 2
 )
 
 type ResultSinkFunc func(data interface{})

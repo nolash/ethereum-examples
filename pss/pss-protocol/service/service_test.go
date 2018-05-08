@@ -76,8 +76,8 @@ func TestRequestHandler(t *testing.T) {
 	statusmsg := &protocol.Status{}
 	if err := rlpmsg.Decode(statusmsg); err != nil {
 		t.Fatal(err.Error())
-	} else if statusmsg.Code != protocol.StatusTooHard {
-		t.Fatalf("Expected StatusGaveup (%d), got %d", protocol.StatusTooHard, statusmsg.Code)
+	} else if statusmsg.Code != protocol.StatusAreYouKidding {
+		t.Fatalf("Expected StatusGaveup (%d), got %d", protocol.StatusAreYouKidding, statusmsg.Code)
 	}
 
 	// change the difficulty so we can time out

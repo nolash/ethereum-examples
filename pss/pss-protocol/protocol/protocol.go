@@ -12,7 +12,7 @@ import (
 const (
 	StatusThanksABunch = iota
 	StatusBusy
-	StatusTooHard
+	StatusAreYouKidding
 	StatusGaveup
 )
 

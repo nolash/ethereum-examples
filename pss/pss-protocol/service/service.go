@@ -196,7 +196,7 @@ func (self *Demo) statusHandlerLocked(msg *protocol.Status, p *protocols.Peer) e
 			return nil
 		}
 		log.Debug("peer is busy. please implement throttling")
-	case protocol.StatusTooHard:
+	case protocol.StatusAreYouKidding:
 		if self.IsWorker() {
 			return nil
 		}
@@ -230,7 +230,7 @@ func (self *Demo) requestHandlerLocked(msg *protocol.Request, p *protocols.Peer)
 	if self.maxDifficulty < msg.Difficulty {
 		go p.Send(&protocol.Status{
 			Id:   msg.Id,
-			Code: protocol.StatusTooHard,
+			Code: protocol.StatusAreYouKidding,
 		})
 		return fmt.Errorf("too hard!")
 	}

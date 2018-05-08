@@ -5,12 +5,16 @@
 		<script type="text/javascript" src="common.js"></script>
 	<script>
 		// namehash 0xfed6fe4ee69a45181535f11f22f2592b6d21a9de0dfd77dda358612d0cb34067
-		var ensName = "mutable.test";
-		
+		//var ensName = "mutable.test";
+	
+		function getEns() {
+			return document.getElementById("ens").value;
+		}
+
 		function getUpdate() {
 			console.log("updating");
 			var r = new XMLHttpRequest();
-			r.open("GET", "http://localhost:8500/bzz-resource:/" + ensName);
+			r.open("GET", "http://localhost:8500/bzz-resource:/" + getEns());
 			r.responseType = "text";
 			r.addEventListener("load", function(e) {
 				if (r.status == 200) {
@@ -29,7 +33,7 @@
 
 		function sendUpdate(dweet, releaseFunc) {
 			var r = new XMLHttpRequest();
-			r.open("POST", "http://localhost:8500/bzz-resource:/" + ensName + "/raw")
+			r.open("POST", "http://localhost:8500/bzz-resource:/" + getEns() + "/raw")
 			r.responseType = "text";
 			r.addEventListener("load", function(e) {
 				if (r.status == 200) {
@@ -63,6 +67,8 @@
 
 		window.onload = function(e) {
 			document.getElementById("dweet_submit").addEventListener("click", handleSubmit);
+			document.getElementById("ens_submit").addEventListener("click", getUpdate);
+			document.getElementById("ens").value = "mutable.test";
 			getUpdate();
 		}
 	</script>
@@ -72,9 +78,10 @@
 			<h1>Feed demo</h1>
 			<p>This demonstrates embedding of dynamic content</p>
 			<div id="error"></div>
-			<form id="dweet">
-				<input type="text" id="dweet_text" name="dweet_text" /> <button id="dweet_submit" type="button">send</button>
-			</form>
+			<form id="dweet" onSubmit="return false;">
+				<input type="text" id="ens" name="ens" /> <button id="ens_submit">set ens</button><br/>
+				<input type="text" id="dweet_text" name="dweet_text" /> <button id="dweet_submit" type="button">send update</button>
+				</form>
 			</hr>
 		</div>
 		<div id="feed">

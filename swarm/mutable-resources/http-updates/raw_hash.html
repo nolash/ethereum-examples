@@ -1,18 +1,27 @@
 <!DOCTYPE>
 <html xmlns="http://www.w3.org/1999/xhtml">
 	<head>
-		<title>Swarm Mutable Resources - feed demo</title>
+		<title>Swarm Mutable Resources - page demo</title>
 		<script type="text/javascript" src="common.js"></script>
 	<script>
 		// namehash 0xfed6fe4ee69a45181535f11f22f2592b6d21a9de0dfd77dda358612d0cb34067
-		var ensNamePost = "mutable.test";
-		var ensNameGet = "94f373bb8df041687d5cc9a6cbf72ccd8886e816c7b25aa1e7776a21c55a540c";
+		var ensNamePost = "test13.mutable.test";
+		var ensNameGet = ensNamePost
+		//var ensNameGet = "df82f78a40d3d2660d0994c7c918ee86fb22b8d10a0dc0e76b23a4da908f0431" // freq 13
+		//var ensNameGet = "29e9fbeb9c0333e351337b724179518c5ee3ba8bf9c3373341f68681cf0c44a1" // freq 13, path has name, hash is hash
+		//var ensNameGet = "a3cf9f5ee46f3b0aa7c1e8ff2888824422023fa86b02045a5040896a1cbfd654" 
+		//var ensNameGet = "94f373bb8df041687d5cc9a6cbf72ccd8886e816c7b25aa1e7776a21c55a540c";
+		//var ensNameGet = "6d2177aa2a067e447b977668e91b632be811be95b735d24c4781ed2a18bef9b5"
+
+		function getEns() {
+			return document.getElementById("ens").value;
+		}
 
 		function getUpdate() {
 			console.log("updating");
 			console.log(document.getElementById("frame_body"));
 			var r = new XMLHttpRequest();
-			src = "http://localhost:8500/bzz:/" + ensNameGet + "/";
+			src = "http://localhost:8500/bzz:/" + getEns() + "/";
 			r.open("GET", src);
 			r.responseType = "text";
 			r.addEventListener("load", function(e) {
@@ -26,7 +35,6 @@
 			});
 			r.timeout = 2000
 			r.send();
-
 		}
 
 		function toSwarmMultihash(hashhex) {
@@ -62,7 +70,7 @@
 			}
 			console.log(multihash);
 			var r = new XMLHttpRequest();
-			var url = "http://localhost:8500/bzz-resource:/" + ensNamePost
+			var url = "http://localhost:8500/bzz-resource:/" + getEns() + "/"
 			console.log(url);
 			r.open("POST", url)
 			r.responseType = "text";
@@ -70,6 +78,8 @@
 				if (r.status == 200) {
 					getUpdate();
 					setError("ok", 0);
+				} else {
+					setError("update failed (" + r.status + ") " + r.response)
 				}
 				releaseFunc();
 			});
@@ -95,16 +105,19 @@
 
 		window.onload = function(e) {
 			document.getElementById("hash_submit").addEventListener("click", handleSubmit);
+			document.getElementById("ens_submit").addEventListener("click", getUpdate);
+			document.getElementById("ens").value = "mutable.test";
 			getUpdate();
 		}
 	</script>
 	</head>
 	<body>
 		<div id="head">
-			<h1>Feed demo</h1>
+			<h1>Page demo</h1>
 			<p>This demonstrates embedding of dynamic content</p>
 			<div id="error"></div>
-			<form id="hash">
+			<form id="hash" onSubmit="return false;">
+				<input type="text" id="ens" name="ens" /> <button id="ens_submit">set ens</button><br/>
 				<input type="text" id="hash_edit" name="hash_edit" size="70" maxlength="66" /> <button id="hash_submit" type="button">send</button>
 			</form>
 			</hr>

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/ecdsa"
+	"flag"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -39,6 +40,9 @@ const (
 )
 
 var (
+	loglevel      = flag.Bool("v", false, "loglevel")
+	useResource   = flag.Bool("r", false, "use resource sink")
+	ensAddr       = flag.String("e", "", "ens name to post resource updates")
 	maxDifficulty uint8
 	minDifficulty uint8
 	maxTime       time.Duration
@@ -47,8 +51,11 @@ var (
 )
 
 func init() {
-	log.PrintOrigins(true)
-	log.Root().SetHandler(log.LvlFilterHandler(log.LvlDebug, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	flag.Parse()
+	if *loglevel {
+		log.PrintOrigins(true)
+		log.Root().SetHandler(log.LvlFilterHandler(log.LvlDebug, log.StreamHandler(colorable.NewColorableStderr(), log.TerminalFormat(true))))
+	}
 
 	maxDifficulty = defaultMaxDifficulty
 	minDifficulty = defaultMinDifficulty
@@ -165,7 +172,7 @@ func main() {
 						continue
 					}
 					c++
-					data := make([]byte, 64)
+					data := make([]byte, 16)
 					rand.Read(data)
 					difficulty := rand.Intn(int(maxDifficulty-minDifficulty)) + int(minDifficulty)
 
@@ -212,7 +219,6 @@ func main() {
 		n.Stop(nid)
 
 	}
-	close(quitC)
 	sigC := make(chan os.Signal)
 	signal.Notify(sigC, syscall.SIGINT)
 
@@ -264,11 +270,22 @@ func connectPssPeers(n *simulations.Network, nids []discover.NodeID) error {
 func newServices() adapters.Services {
 	return adapters.Services{
 		"bzz": func(node *adapters.ServiceContext) (node.Service, error) {
-			resourceapi := resource.NewClient(defaultResourceApiHost, fmt.Sprintf("%x.mutable.test", node.Config.ID[:]))
-			params := service.NewDemoParams(resourceapi.ResourceSinkFunc())
+			var resourceEnsName string
+			if *ensAddr != "" {
+				resourceEnsName = *ensAddr
+			} else {
+				resourceEnsName = fmt.Sprintf("%x.mutable.test", node.Config.ID[:])
+			}
+			resourceapi := resource.NewClient(defaultResourceApiHost, resourceEnsName)
+			var sinkFunc service.ResultSinkFunc
+			if *useResource {
+				sinkFunc = resourceapi.ResourceSinkFunc()
+			}
+			params := service.NewDemoParams(sinkFunc, saveFunc)
 			params.MaxJobs = maxJobs
 			params.MaxTimePerJob = maxTime
 			params.MaxDifficulty = maxDifficulty
+			params.Id = node.Config.ID[:]
 
 			// create the pss service that wraps the demo protocol
 			svc, err := service.NewDemo(params)
@@ -290,4 +307,8 @@ func newServices() adapters.Services {
 			return bzzSvc, nil
 		},
 	}
+}
+
+func saveFunc(nid []byte, id protocol.ID, difficulty uint8, data []byte, nonce []byte, hash []byte) {
+	fmt.Fprintf(os.Stdout, "RESULT >> %x/%x : %x@%d|%x => %x\n", nid[:8], id, data, difficulty, nonce, hash)
 }

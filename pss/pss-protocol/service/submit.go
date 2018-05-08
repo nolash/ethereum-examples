@@ -69,6 +69,15 @@ func (self *submitStore) GetData(id protocol.ID) []byte {
 	return nil
 }
 
+func (self *submitStore) GetDifficulty(id protocol.ID) uint8 {
+	self.mu.Lock()
+	defer self.mu.Unlock()
+	if self.have(id) {
+		return self.idx[id].Difficulty
+	}
+	return 0
+}
+
 func (self *submitStore) IncSerial() uint64 {
 	self.mu.Lock()
 	defer self.mu.Unlock()

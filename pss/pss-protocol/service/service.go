@@ -34,6 +34,7 @@ type Demo struct {
 
 	submits *submitStore
 	results *resultStore
+	save    SaveFunc
 
 	// internal stuff
 	protocol *p2p.Protocol
@@ -42,17 +43,21 @@ type Demo struct {
 	cancel   func()
 }
 
+type SaveFunc func(nid []byte, mid protocol.ID, difficulty uint8, data []byte, nonce []byte, hash []byte)
+
 type DemoParams struct {
 	Id            []byte
 	MaxDifficulty uint8
 	MaxJobs       int
 	MaxTimePerJob time.Duration
 	ResultSink    ResultSinkFunc
+	Save          SaveFunc
 }
 
-func NewDemoParams(sinkFunc ResultSinkFunc) *DemoParams {
+func NewDemoParams(sinkFunc ResultSinkFunc, saveFunc SaveFunc) *DemoParams {
 	return &DemoParams{
 		ResultSink: sinkFunc,
+		Save:       saveFunc,
 	}
 }
 
@@ -66,6 +71,7 @@ func NewDemo(params *DemoParams) (*Demo, error) {
 		workers:       make(map[*protocols.Peer]uint8),
 		submits:       newSubmitStore(),
 		results:       newResultStore(ctx, params.ResultSink),
+		save:          params.Save,
 		ctx:           ctx,
 		cancel:        cancel,
 	}
@@ -288,6 +294,7 @@ func (self *Demo) resultHandlerLocked(msg *protocol.Result, p *protocols.Peer) e
 		Id:   msg.Id,
 		Code: protocol.StatusThanksABunch,
 	})
+	self.save(self.id, msg.Id, self.submits.GetDifficulty(msg.Id), self.submits.GetData(msg.Id), msg.Nonce, msg.Hash)
 	return nil
 }
 
